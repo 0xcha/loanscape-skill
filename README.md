@@ -13,11 +13,13 @@ Built by [Lotus Labs](https://lotuslabs.net). Scaffolded 2026-09-21; works again
 /plugin install lotus@lotus-labs
 ```
 
-**Any agent that reads SKILL.md** (Cursor, Codex, Gemini CLI, Copilot):
+**Codex, Cursor, Gemini CLI, Copilot** (anything that reads SKILL.md). The `skills/` folder holds self-contained copies of the five skills, scripts included:
 
 ```
 npx skills add 0xcha/loanscape-skill
 ```
+
+Or by hand, for Codex: `git clone https://github.com/0xcha/loanscape-skill && cp -R loanscape-skill/skills/* ~/.codex/skills/`. Then `$loanscape`, or just ask a borrow question. Untested in Codex as of 2026-09-23; the format is the shared one, the trigger and shell behaviour aren't verified there.
 
 **claude.ai / Claude desktop:** zip `plugins/lotus/skills/loanscape/` and upload it under Settings → Features → Skills. Requires code execution on and a network setting that allows outbound requests.
 

@@ -1,0 +1,22 @@
+{
+  "_comment": "Onchain venue registry for positions.mjs. Aave-likes expose the same Pool ABI; the oracle is discovered via ADDRESSES_PROVIDER().getPriceOracle(). Comets are Compound v3 instances. Every address was called live on 2026-09-22 (code present, baseToken or ADDRESSES_PROVIDER responds).",
+  "chains": { "1": "Ethereum", "8453": "Base", "42161": "Arbitrum" },
+  "aaveLike": [
+    { "chainId": 1, "protocol": "aave-v3", "venue": "Aave v3 · Main", "pool": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2", "url": "https://app.aave.com/", "verified": true },
+    { "chainId": 1, "protocol": "aave-v3", "venue": "Aave v3 · Prime", "pool": "0x4e033931ad43597d96D6bcc25c280717730B58B1", "url": "https://app.aave.com/?marketName=proto_lido_v3", "verified": true },
+    { "chainId": 1, "protocol": "sparklend", "venue": "Spark · Main", "pool": "0xC13e21B648A5Ee794902342038FF3aDAB66BE987", "url": "https://app.spark.fi/", "verified": true },
+    { "chainId": 8453, "protocol": "aave-v3", "venue": "Aave v3 · Main", "pool": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5", "url": "https://app.aave.com/?marketName=proto_base_v3", "verified": true },
+    { "chainId": 42161, "protocol": "aave-v3", "venue": "Aave v3 · Main", "pool": "0x794a61358D6845594F94dc1DB02A252b5b4814aD", "url": "https://app.aave.com/?marketName=proto_arbitrum_v3", "verified": true }
+  ],
+  "comets": [
+    { "chainId": 1, "venue": "Compound v3 · USDC comet", "comet": "0xc3d688B66703497DAA19211EEdff47f25384cdc3", "url": "https://app.compound.finance/?market=usdc-mainnet", "verified": true },
+    { "chainId": 1, "venue": "Compound v3 · ETH comet", "comet": "0xA17581A9E3356d9A858b789D68B4d866e593aE94", "url": "https://app.compound.finance/?market=weth-mainnet", "verified": true },
+    { "chainId": 1, "venue": "Compound v3 · USDT comet", "comet": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840", "url": "https://app.compound.finance/?market=usdt-mainnet", "verified": true },
+    { "chainId": 8453, "venue": "Compound v3 · USDC comet", "comet": "0xb125E6687d4313864e53df431d5425969c15Eb2F", "url": "https://app.compound.finance/?market=usdc-basemainnet", "verified": true },
+    { "chainId": 8453, "venue": "Compound v3 · ETH comet", "comet": "0x46e6b214b524310239732D51387075E0e70970bf", "url": "https://app.compound.finance/?market=weth-basemainnet", "verified": true },
+    { "chainId": 42161, "venue": "Compound v3 · USDC comet", "comet": "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf", "url": "https://app.compound.finance/?market=usdc-arbitrum", "verified": true }
+  ],
+  "morpho": { "api": "https://blue-api.morpho.org/graphql", "chains": [1, 8453, 42161], "appUrl": "https://app.morpho.org" },
+  "fluid": { "resolver": "0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC", "api": "https://api.fluid.instadapp.io", "appUrl": "https://fluid.io", "chains": [1, 8453, 42161], "_note": "VaultResolver address is identical on Ethereum, Base and Arbitrum per Instadapp/fluid-contracts-public deployments (read 2026-09-22)" },
+  "ens": { "registry": "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" }
+}
