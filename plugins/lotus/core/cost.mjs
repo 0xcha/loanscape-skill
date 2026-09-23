@@ -11,17 +11,18 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fetchOffers, loadMem, saveMem, pairLinkOnce, venueName } from "./lib/offers.mjs";
 import { bps, fmtPerM, dollarsPerYear, trustedHistory } from "./lib/rules.mjs";
+import { mdTable, shareBar } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const T = JSON.parse(readFileSync(join(HERE, "tokens.json"), "utf8"));
 const DEEP = 1e6, DEPTH_SHARE = 0.10;
 
 const args = parseArgs(process.argv.slice(2));
-if (!args.coll || !args.borrow) die("usage: node cost.mjs --coll <sym> --borrow <sym> [--size 500k] [--ltv 60] [--paying 5.4 [--venue aave]] [--chain ethereum|base|arbitrum] [--json]");
+if (!args.coll || !args.borrow) die("usage: node cost.mjs --coll <sym> --borrow <sym> [--size 500k] [--ltv 60] [--paying 5.4 | --venue aave [--paying 5.4]] [--chain ethereum|base|arbitrum] [--json]");
 const chainId = T.chains[String(args.chain || "ethereum").toLowerCase()]; if (!chainId) die(`unknown chain "${args.chain}"`);
 const size = args.size ? Number(String(args.size).replace(/[$,_kKmM]/g, (m) => ({ k: "e3", K: "e3", m: "e6", M: "e6" }[m] || ""))) : null;
 const ltvArg = args.ltv != null ? Number(String(args.ltv).replace("%", "")) : null;
-const paying = args.paying != null ? Number(String(args.paying).replace("%", "")) : null;
+let paying = args.paying != null ? Number(String(args.paying).replace("%", "")) : null;
 const myVenue = args.venue ? String(args.venue).toLowerCase() : null;
 const venueFilter = args.venues ? String(args.venues).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean) : null;
 
@@ -34,7 +35,7 @@ const r2 = (x) => Math.round(Number(x) * 100) / 100;
 const offers = m.offers.filter((o) => o.apr != null).map((o) => ({ ...o, ...trustedHistory(o), apr: r2(o.apr), rewards: r2(o.rewards || 0) }));
 const mem = loadMem();
 const out = { chainId, pair, collYield, borrowYield, size, ltv: ltvArg, paying, venue: myVenue, text: null };
-out.text = paying != null ? refiCheck() : loanCost();
+out.text = paying != null || myVenue ? refiCheck() : loanCost();
 if (!args.json) saveMem(mem);
 console.log(args.json ? JSON.stringify({ ...out, offers: offers.map(({ sparkline, ...o }) => o) }, null, 2) : out.text);
 
@@ -62,9 +63,10 @@ function loanCost() {
   if (rows.length >= 3) {
     L.push("");
     const hasRw = rows.some((r) => r.o.rewards), showNet = carry || collYield > 0 || hasRw;
-    const H = ["venue", "borrow", ...(hasRw ? ["rewards"] : []), ...(showNet ? [carry ? "carry" : "net"] : []), "max LTV", "available"];
-    const R = rows.map(({ o, net }) => [name(o, offers), pct(o.apr), ...(hasRw ? [o.rewards ? pct(o.rewards) : ""] : []), ...(showNet ? [carry ? `${signed(bps(net))} bps` : pct(net)] : []), ltvS(o.maxLtv), usdShort(o.liquidityUsd)]);
-    L.push(...grid(H, R), "");
+    const H = ["venue", "borrow", ...(hasRw ? ["rewards"] : []), ...(showNet ? [carry ? "carry" : "net"] : []), "max LTV", "available", ...(size ? ["your share", ""] : [])];
+    const A = ["l", "r", ...(hasRw ? ["r"] : []), ...(showNet ? ["r"] : []), "r", "r", ...(size ? ["r", "l"] : [])];
+    const R = rows.map(({ o, net }) => [name(o, offers), pct(o.apr), ...(hasRw ? [o.rewards ? pct(o.rewards) : ""] : []), ...(showNet ? [carry ? `${signed(bps(net))} bps` : pct(net)] : []), ltvS(o.maxLtv), usdShort(o.liquidityUsd), ...(size ? [o.liquidityUsd ? pctShare(size / o.liquidityUsd) : "", shareBar(size, o.liquidityUsd)] : [])]);
+    L.push(mdTable(H, R, A, rows.indexOf(best)), "");
   } else if (rows.length === 2) {
     const other = rows.find((r) => r !== best); L.push(`${name(other.o, offers)}: ${pct(other.o.apr)} borrow, ${carry ? `carry ${signed(bps(other.net))} bps` : `net ${pct(other.net)}`}, ${usdShort(other.o.liquidityUsd)} available.`);
   }
@@ -73,33 +75,40 @@ function loanCost() {
   if (carry) L.push(`Both legs float: the yield and the borrow rate move independently, so the carry can close or flip. At ${ltvS(best.o.maxLtv) || "the venue's max"} LTV the loop allows up to ${best.o.maxLtv ? (1 / (1 - best.o.maxLtv / 100)).toFixed(1) : "?"}x exposure; liquidation risk scales with it.`);
   else if (collYield > 0) L.push(`The offset shrinks as LTV rises: at ${Math.min(ltv + 20, 90)}% LTV it is ${(collYield / (Math.min(ltv + 20, 90) / 100)).toFixed(2)} points. Rates on both sides float.`);
   const link = args.json ? null : pairLinkOnce(mem, chainId, coll, borrow, null); if (link) L.push(link);
-  return L.join("\n");
+  return paragraphs(L);
 }
+// Lines become paragraphs: one idea per block, tables kept intact.
+function paragraphs(L) { const out = []; let inTable = false; for (const l of L) { if (l === "") { continue; } const isRow = l.startsWith("|"); if (isRow && !inTable) { out.push(""); inTable = true; } else if (!isRow && inTable) { out.push(""); inTable = false; } else if (!isRow) { if (out.length) out.push(""); } out.push(l); } return out.join("\n"); }
 
 // ---------------- refinance check ----------------
 function refiCheck() {
-  const mine = myVenue ? offers.filter((o) => matchVenue(o, myVenue)).sort((a, b) => Math.abs(a.apr - paying) - Math.abs(b.apr - paying))[0] : null;
+  const mine = myVenue ? offers.filter((o) => matchVenue(o, myVenue)).sort((a, b) => (paying != null ? Math.abs(a.apr - paying) - Math.abs(b.apr - paying) : a.apr - b.apr))[0] : null;
+  let assumed = false;
+  if (paying == null) { if (!mine) return `I don't see ${myVenue} on ${pair} right now. Tell me the rate you're paying and I'll compare it.`; paying = mine.apr; assumed = true; }
   const need = size || DEEP;
   const alts = bestPerProtocol(offers.filter((o) => o !== mine && !(mine && sameVenue(o, mine)) && (o.liquidityUsd || 0) >= need && (ltvArg == null || o.maxLtv == null || o.maxLtv >= ltvArg)).sort((a, b) => a.apr - b.apr));
-  const L = [];
-  const here = `on ${pair}${myVenue ? ` at ${name(mine || { venue: myVenue, protocol: myVenue })}` : ""}`;
-  if (!alts.length) { L.push(`You're paying ${pct(paying)} ${here}. Nothing else with ${usdShort(need)} available${ltvArg != null ? ` and ${ltvArg}% LTV room` : ""} is on this pair right now.`); return L.join("\n"); }
+  const P = [];
+  const here = `on ${pair}${myVenue ? ` at ${name(mine || { venue: myVenue, protocol: myVenue }, offers)}` : ""}`;
+  const youPay = assumed ? `${name(mine, offers)} charges ${pct(paying)} ${here.replace(/ at .*$/, "")} today, so that's the rate I'm using.` : `You're paying ${pct(paying)} ${here}.`;
+  if (!alts.length) { P.push(`${youPay} Nothing else with ${usdShort(need)} available${ltvArg != null ? ` and ${ltvArg}% LTV room` : ""} is on this pair right now.`); return P.join("\n\n"); }
   const best = alts[0]; const gap = bps(paying - best.apr);
   const swing = typicalWeeklySwing(offers);
   if (gap <= 0) {
-    L.push(`You're paying ${pct(paying)} ${here}. Nothing deep beats it today: the cheapest alternative is ${name(best, offers)} at ${pct(best.apr)}${gap < 0 ? `, ${Math.abs(gap)} bps more` : ""}.`);
+    P.push(`${youPay} Nothing deep beats it today; the cheapest alternative is ${name(best, offers)} at ${pct(best.apr)}${gap < 0 ? `, ${Math.abs(gap)} bps more` : ""}.`);
   } else {
-    L.push(`You're paying ${pct(paying)} ${here}. ${name(best, offers)} charges ${pct(best.apr)} on the same pair, ${gap} bps less: ${size ? `${usdShort(dollarsPerYear(gap, size))} a year at ${usdShort(size)}` : fmtPerM(gap)}, with ${usdShort(best.liquidityUsd)} available${size ? ` (you'd be ${pctShare(size / best.liquidityUsd)} of it)` : ""}${best.maxLtv != null ? `, max LTV ${ltvS(best.maxLtv)}` : ""}.`);
-    if (swing != null) L.push(gap >= swing * 2 ? `That gap is ${(gap / swing).toFixed(1)}x this pair's typical weekly swing (${swing} bps), so it is not noise.` : gap >= swing ? `That gap is about this pair's typical weekly swing (${swing} bps); it could close on its own.` : `That gap is inside this pair's typical weekly swing (${swing} bps); it may close on its own before a move pays for itself.`);
-    if (alts[1] && bps(paying - alts[1].apr) > 0) L.push(`Next: ${name(alts[1], offers)} at ${pct(alts[1].apr)}, ${usdShort(alts[1].liquidityUsd)} available.`);
-    L.push(`Moving means repaying and reborrowing, two or three transactions with gas on each, and a new liquidation price at the new venue.`);
+    P.push(`${youPay} ${name(best, offers)} charges ${pct(best.apr)}, ${gap} bps less: ${size ? `${usdShort(dollarsPerYear(gap, size))} a year on ${usdShort(size)}` : fmtPerM(gap)}.`);
+    const depth = `${name(best, offers)} has ${usdShort(best.liquidityUsd)} available${size ? `, so you'd be ${pctShare(size / best.liquidityUsd)} of it` : ""}${best.maxLtv != null ? `, and its max LTV is ${ltvS(best.maxLtv)}` : ""}.`;
+    const ctx = swing != null ? (gap >= swing * 2 ? `The gap is ${(gap / swing).toFixed(1)}x this pair's typical weekly swing of ${swing} bps, so it isn't noise.` : gap >= swing ? `The gap is about this pair's typical weekly swing of ${swing} bps; it could close on its own.` : `The gap is inside this pair's typical weekly swing of ${swing} bps; it may close before a move pays for itself.`) : null;
+    P.push([depth, ctx].filter(Boolean).join(" "));
+    const next = alts[1] && bps(paying - alts[1].apr) > 0 ? `Next best is ${name(alts[1], offers)} at ${pct(alts[1].apr)} with ${usdShort(alts[1].liquidityUsd)} available.` : null;
+    P.push([next, "Moving means repaying here and reborrowing there, two or three transactions with gas on each, and a new liquidation price at the new venue."].filter(Boolean).join(" "));
   }
-  if (mine) { const drift = bps(mine.apr - paying); if (Math.abs(drift) >= 10) L.push(`${name(mine)} shows ${pct(mine.apr)} on this pair right now, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} what you quoted; variable rates move under you.`); }
-  else if (myVenue) L.push(`I couldn't match "${myVenue}" to a venue on this pair; compared against every deep venue instead.`);
-  const link = args.json ? null : pairLinkOnce(mem, chainId, coll, borrow, null); if (link) L.push(link);
-  return L.join("\n");
+  if (mine && !assumed) { const drift = bps(mine.apr - paying); if (Math.abs(drift) >= 10) P.push(`${name(mine, offers)} shows ${pct(mine.apr)} on this pair right now, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} what you quoted; variable rates move under you.`); }
+  else if (myVenue && !mine) P.push(`I couldn't match "${myVenue}" to a venue on this pair, so this compares against every deep venue.`);
+  const link = args.json ? null : pairLinkOnce(mem, chainId, coll, borrow, null); if (link) P.push(link);
+  return P.join("\n\n");
 }
-function typicalWeeklySwing(list) { const v = list.filter((o) => (o.liquidityUsd || 0) >= DEEP && o.sparkline?.length >= 8).map((o) => Math.abs(bps(o.apr - o.sparkline[o.sparkline.length - 7]))).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; }
+function typicalWeeklySwing(list) { const v = list.filter((o) => !o.suspect && (o.liquidityUsd || 0) >= DEEP && o.sparkline?.length >= 8).map((o) => Math.abs(bps(o.apr - o.sparkline[o.sparkline.length - 7]))).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; }
 
 // ---------------- helpers ----------------
 function bestPerProtocol(sorted) { const seen = new Set(); return sorted.filter((o) => { const k = o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""); if (seen.has(k)) return false; seen.add(k); return true; }); }

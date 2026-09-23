@@ -17,5 +17,10 @@ export function fmtPerM(deltaBps) { const v = perMUsdYr(deltaBps); return `${v >
 export const ENDPOINT_GAP_BPS = 300;
 export const endpointGapOf = (o) => ((o.sparkline || []).length ? Math.round(Math.abs(o.sparkline[o.sparkline.length - 1] - o.apr) * 100) : null);
 export const suspectEndpoint = (o) => { const g = endpointGapOf(o); return g != null && g >= ENDPOINT_GAP_BPS; };
-// History-derived fields, gated. Returns null-ed fields for a suspect market so callers never print them by accident.
-export function trustedHistory(o) { if (!o.sparkline?.length || suspectEndpoint(o)) return { sparkline: [], stability: null, suspect: !!o.sparkline?.length }; return { sparkline: o.sparkline, stability: o.stability ?? null, suspect: false }; }
+// History-derived fields, gated. For a suspect market the bad endpoint is replaced with the live rate (the agent's repairSuspect),
+// so a sparkline can still be drawn, but the label is dropped and `suspect` tells callers to make no 30-day claim about it.
+export function trustedHistory(o) {
+  if (!o.sparkline?.length) return { sparkline: [], stability: null, suspect: false };
+  if (suspectEndpoint(o)) return { sparkline: [...o.sparkline.slice(0, -1), o.apr], stability: null, suspect: true };
+  return { sparkline: o.sparkline, stability: o.stability ?? null, suspect: false };
+}

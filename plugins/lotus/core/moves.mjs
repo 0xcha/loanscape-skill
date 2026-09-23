@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fetchOffers, loadMem, saveMem, pairLinkOnce, venueName } from "./lib/offers.mjs";
 import { bps, trustedHistory } from "./lib/rules.mjs";
+import { mdTable, sparkline } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const T = JSON.parse(readFileSync(join(HERE, "tokens.json"), "utf8"));
@@ -53,7 +54,7 @@ if (args.json) console.log(JSON.stringify(out, null, 2)); else console.log(out.t
 // ---------------- stats ----------------
 function stats(m) {
   const s = m.sparkline; const n = s.length;
-  if (n < 2) return { hasHistory: false };
+  if (n < 2 || m.suspect) return { hasHistory: false };
   const series = [...s, m.apr]; // history then the live reading
   const ago = series.length - 1 - days; const past = ago >= 0 ? series[ago] : series[0];
   const change = bps(m.apr - past);
@@ -94,7 +95,8 @@ function renderCross() {
     else quietChains.push(chainName(sc.chainId));
   }
   if (quietChains.length) L.push(`${listJoin(quietChains)} quiet.`);
-  const suspect = scans.flatMap((sc) => sc.uniq.filter((m) => m.suspect)); if (suspect.length) L.push(`${listJoin([...new Set(suspect.map(where))].slice(0, 2))} left out: rate history disagrees with the live rate.`);
+  const suspect = [...new Set(scans.flatMap((sc) => sc.uniq.filter((m) => m.suspect)).map(where))];
+  if (suspect.length) L[0] = L[0].replace(/ markets\.$/, ` markets; ${listJoin(suspect.slice(0, 2))} skipped, history unreliable.`);
   return L.join("\n");
 }
 function flipsByPair(hist) {
@@ -116,12 +118,10 @@ function renderPair() {
   const verdict = agree ? byCount : `${byCount} by venue, ${byDepth} where the depth is (${wnet > 0 ? "+" : ""}${Math.round(wnet)} bps weighted)`;
   const L = [`${pair} on ${chainName(chainId)}, last ${days} days: ${verdict}.`, ""];
   const ranked = [...ms].sort((a, b) => (b.deep - a.deep) || (Math.abs(b.change) - Math.abs(a.change))).slice(0, 7);
-  const rows = ranked.map((m) => [name(m, ms), pct(m.apr), Math.abs(m.change) >= 10 ? `${m.change > 0 ? "+" : "−"}${Math.abs(m.change)} bps` : "flat", Math.abs(m.streak) >= R.streakDays && Math.abs(m.change) >= 10 ? `${Math.abs(m.streak)} days ${m.streak > 0 ? "up" : "down"}` : "", m.posInRange >= 0.9 ? "high" : m.posInRange <= 0.1 ? "low" : "", Math.abs(m.biggestStep.bps) >= R.stepBps ? `${Math.abs(m.biggestStep.bps)} bps ${m.biggestStep.bps > 0 ? "jump" : "drop"} ${ago(m.biggestStep.daysAgo)}` : "", m.deep ? "" : `thin, ${usdShort(m.liquidityUsd)}`]);
-  const H = ["venue", "now", `${days}d`, "run", "30d", "step", ""];
-  const keep = H.map((_, i) => i < 3 || rows.some((r) => r[i])); const HH = H.filter((_, i) => keep[i]); const RR = rows.map((r) => r.filter((_, i) => keep[i]));
-  const w = HH.map((h, i) => Math.max(h.length, ...RR.map((r) => String(r[i]).length)));
-  const line = (r) => r.map((c, i) => String(c).padEnd(w[i])).join("  ").trimEnd();
-  L.push(line(HH), ...RR.map(line));
+  const rows = ranked.map((m) => [name(m, ms), pct(m.apr), Math.abs(m.change) >= 10 ? `${m.change > 0 ? "+" : "−"}${Math.abs(m.change)} bps` : "flat", sparkline(m.sparkline, m.apr), Math.abs(m.streak) >= R.streakDays && Math.abs(m.change) >= 10 ? `${Math.abs(m.streak)} days ${m.streak > 0 ? "up" : "down"}` : "", m.posInRange >= 0.9 ? "high" : m.posInRange <= 0.1 ? "low" : "", Math.abs(m.biggestStep.bps) >= R.stepBps ? `${Math.abs(m.biggestStep.bps)} bps ${m.biggestStep.bps > 0 ? "jump" : "drop"} ${ago(m.biggestStep.daysAgo)}` : "", m.deep ? "" : `thin, ${usdShort(m.liquidityUsd)}`]);
+  const H = ["venue", "now", `${days}d`, "30 days", "run", "30d", "step", ""]; const A = ["l", "r", "r", "l", "l", "l", "l", "l"];
+  const keep = H.map((_, i) => i < 4 || rows.some((r) => r[i])); const HH = H.filter((_, i) => keep[i]); const AA = A.filter((_, i) => keep[i]); const RR = rows.map((r) => r.filter((_, i) => keep[i]));
+  L.push(mdTable(HH, RR, AA, -1));
   const suspect = live.filter((m) => m.suspect); if (suspect.length) L.push("", `${listJoin([...new Set(suspect.map((m) => name(m, ms)))])} left out: rate history disagrees with the live rate.`);
   const link = args.json ? null : pairLinkOnce(mem, chainId, live[0]?.coll || pairs[0][0], live[0]?.borrow || pairs[0][1], null);
   if (link) L.push("", link);

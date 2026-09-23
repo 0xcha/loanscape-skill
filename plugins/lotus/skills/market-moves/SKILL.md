@@ -33,7 +33,9 @@ Pairs: ETH, wstETH, cbBTC, WBTC against USDC, and wstETH against WETH. `--pair` 
 
 ## Render
 
-Print the script's text exactly as returned. No heading, no restating numbers, no glossing. Put the pair story's table in a code fence; prose stays outside. "Quiet" is a complete answer; do not pad it. The cross-market read carries no link by design; never add one.
+No preamble. The first thing you print is the script's text; never announce that you're reading a guide or running a script.
+
+Print the script's text exactly as returned. No heading, no restating numbers, no glossing. The pair story's table is markdown; print it as-is, never inside a code fence. "Quiet" is a complete answer; do not pad it. The cross-market read carries no link by design; never add one.
 
 If the run doesn't fit the question (wrong window, wrong pair), run again before answering.
 

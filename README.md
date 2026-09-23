@@ -9,27 +9,27 @@ Built by [Lotus Labs](https://lotuslabs.net). Scaffolded 2026-09-21; works again
 **Claude Code** (two commands):
 
 ```
-/plugin marketplace add lotuslabs/loanscape-skill
-/plugin install loanscape@lotus-labs
+/plugin marketplace add 0xcha/loanscape-skill
+/plugin install lotus@lotus-labs
 ```
 
 **Any agent that reads SKILL.md** (Cursor, Codex, Gemini CLI, Copilot):
 
 ```
-npx skills add lotuslabs/loanscape-skill
+npx skills add 0xcha/loanscape-skill
 ```
 
-**claude.ai / Claude desktop:** zip `plugins/loanscape/skills/loanscape/` and upload it under Settings → Features → Skills. Requires code execution on and a network setting that allows outbound requests.
+**claude.ai / Claude desktop:** zip `plugins/lotus/skills/loanscape/` and upload it under Settings → Features → Skills. Requires code execution on and a network setting that allows outbound requests.
 
-Replace `lotuslabs/loanscape-skill` with the real GitHub path once the repo is published.
+Then turn on auto-update for the `lotus-labs` marketplace once (`/plugin` → Marketplaces → lotus-labs → enable auto-update), and every version bump reaches you at your next launch.
 
 ## Try it without installing
 
 ```
-node plugins/loanscape/core/market.mjs --coll ETH --borrow USDC                       # three-line read
-node plugins/loanscape/core/market.mjs --coll wstETH --borrow WETH --venues aave,morpho --size 2m
-node plugins/loanscape/core/market.mjs --coll BTC --borrow USDC --table --rank ltv
-node plugins/loanscape/core/brief.mjs --wallet vitalik.eth                            # the /loanscape brief
+node plugins/lotus/core/market.mjs --coll ETH --borrow USDC                       # three-line read
+node plugins/lotus/core/market.mjs --coll wstETH --borrow WETH --venues aave,morpho --size 2m
+node plugins/lotus/core/market.mjs --coll BTC --borrow USDC --table --rank ltv
+node plugins/lotus/core/brief.mjs --wallet vitalik.eth                            # the /loanscape brief
 ```
 
 Node 18+, no dependencies. Behind a proxy the script falls back to `curl`.
@@ -38,7 +38,7 @@ Node 18+, no dependencies. Behind a proxy the script falls back to `curl`.
 
 ```
 .claude-plugin/marketplace.json          Claude Code marketplace (one plugin: loanscape)
-plugins/loanscape/
+plugins/lotus/
   .claude-plugin/plugin.json
   core/                                  shared by every skill
     brief.mjs                            the /loanscape brief: positions + market + urgency + diff, prints finished text
@@ -72,17 +72,28 @@ Say "run this every morning at 8" in chat. Nobody types a command. Where the bri
 
 Or just type `/loanscape` in the morning. It takes four seconds and remembers your wallet.
 
+## Updating an installed copy
+
+An install is a copy. `claude plugin update lotus@lotus-labs` only replaces it when the plugin version has gone up, so bump before telling anyone to update:
+
+```
+./bump.sh          # patch, e.g. 0.2.0 → 0.2.1
+./bump.sh minor
+```
+
+If `update` still says it's at the latest version, `claude plugin uninstall lotus@lotus-labs && claude plugin install lotus@lotus-labs`.
+
 ## Telemetry
 
 Requests carry `User-Agent: loanscape-skill/<version>` and `X-Loanscape-Client: claude-skill`; links carry `?src=claude-skill`. That is what lets Lotus report agent-routed queries as their own line, separate from browser users. No user data leaves the machine.
 
-## core/positions.mjs (added 2026-09-22; now at plugins/loanscape/core/)
+## core/positions.mjs (added 2026-09-22; now at plugins/lotus/core/)
 
 Every open borrow position for a wallet, across Aave v3 (Main and Prime), Spark, Morpho Blue, Compound v3 and Fluid, on Ethereum, Base and Arbitrum. Public RPCs with fallbacks plus Morpho's public API; no keys, no dependencies. Accepts an address or an ENS name.
 
 ```
-node plugins/loanscape/core/positions.mjs --wallet vitalik.eth
-node plugins/loanscape/core/positions.mjs --wallet 0x... --chain ethereum --json
+node plugins/lotus/core/positions.mjs --wallet vitalik.eth
+node plugins/lotus/core/positions.mjs --wallet 0x... --chain ethereum --json
 ```
 
 One normalised shape per position: venue, kind (pooled or isolated), collateral[] and debt[] with amounts, USD and per-debt APR, LTV, liquidation threshold, health factor, and a liquidation price with percent drop when the position is one collateral against one debt. Positions sort by health, riskiest first. Dust under $1 is dropped. Venues that fail to read are named in `errors` rather than silently omitted.

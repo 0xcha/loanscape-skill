@@ -1,15 +1,28 @@
 {
   "name": "lotus-labs",
-  "owner": { "name": "Lotus Labs", "url": "https://lotuslabs.net" },
-  "metadata": { "description": "Skills from Lotus Labs. Loanscape: live onchain borrow-rate comparison." },
+  "owner": {
+    "name": "Lotus Labs",
+    "url": "https://lotuslabs.net"
+  },
+  "metadata": {
+    "description": "Skills from Lotus Labs. Loanscape: live onchain borrow-rate comparison."
+  },
   "plugins": [
     {
-      "name": "loanscape",
-      "source": "./plugins/loanscape",
+      "name": "lotus",
+      "source": "./plugins/lotus",
       "description": "Compare live DeFi borrow offers (rate, LTV, liquidity, 30-day stability) for a collateral/borrow pair across Aave, Morpho, Spark, Compound and more, via the Loanscape API.",
-      "version": "0.1.0",
+      "version": "0.2.5",
       "category": "External Integrations",
-      "keywords": ["defi", "borrow", "lending", "rates", "aave", "morpho", "loanscape"]
+      "keywords": [
+        "defi",
+        "borrow",
+        "lending",
+        "rates",
+        "aave",
+        "morpho",
+        "loanscape"
+      ]
     }
   ]
 }

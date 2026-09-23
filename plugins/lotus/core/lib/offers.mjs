@@ -12,14 +12,19 @@ const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : null; 
 export const deepLink = (collSym, borrowSym, rank, src = "claude") => `${APP}/?coll=${encodeURIComponent(collSym)}&borrow=${encodeURIComponent(borrowSym)}${rank ? `&rank=${rank}` : ""}&src=${src}`;
 
 // Link policy: a link is a next move the chat can't deliver, offered once per pair per conversation (6h window), never as a footer.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 const LINK_TTL_MS = 6 * 3600 * 1000;
-const HOME = process.env.LOANSCAPE_HOME || join(homedir(), ".loanscape");
-const MEM = join(HOME, "memory.json");
-export function loadMem() { try { return JSON.parse(readFileSync(MEM, "utf8")); } catch { return { version: 1, wallets: {}, defaultWallet: null }; } }
-export function saveMem(m) { try { if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true }); writeFileSync(MEM, JSON.stringify(m, null, 2)); } catch {} }
+// Memory lives in the first writable home: $LOANSCAPE_HOME, then ~/.loanscape, then ./.claude/loanscape in the working
+// directory (sandboxes that block the home folder still allow the project), else nowhere (the scripts print, just without memory).
+const CANDIDATES = [process.env.LOANSCAPE_HOME, join(homedir(), ".loanscape"), join(process.cwd(), ".claude", "loanscape")].filter(Boolean);
+function writable(dir) { try { if (!existsSync(dir)) mkdirSync(dir, { recursive: true }); const probe = join(dir, ".w"); writeFileSync(probe, "1"); try { unlinkSync(probe); } catch {} return true; } catch { return false; } }
+let HOME = null;
+export function memHome() { if (HOME !== null) return HOME; for (const d of CANDIDATES) { if (writable(d)) { HOME = d; return HOME; } } HOME = ""; return HOME; }
+export function memPath() { const h = memHome(); return h ? join(h, "memory.json") : null; }
+export function loadMem() { for (const d of CANDIDATES) { try { return JSON.parse(readFileSync(join(d, "memory.json"), "utf8")); } catch {} } return { version: 1, wallets: {}, defaultWallet: null }; }
+export function saveMem(m) { const p = memPath(); if (!p) return false; try { writeFileSync(p, JSON.stringify(m, null, 2)); return true; } catch { return false; } }
 // Returns the link line for this pair if it hasn't been offered recently, and marks it offered in `mem` (caller saves).
 export function pairLinkOnce(mem, chainId, collSym, borrowSym, rank = null) {
   const key = `${chainId}:${collSym}/${borrowSym}`; mem.linked ||= {};

@@ -39,7 +39,9 @@ Venue names for `--venues`: `aave` (Main), `prime` (Aave Prime), `spark`, `morph
 
 ## Render
 
-Print the script's text exactly as returned. No heading, no restating numbers in prose, no glossing. The script leads with the answer; it adds the Loanscape link once per pair per conversation and omits it after that. Never add a link yourself. Put a table inside a code fence so the columns hold; prose stays outside.
+No preamble. The first thing you print is the script's text; never announce that you're reading a guide or running a script.
+
+Print the script's text exactly as returned. No heading, no restating numbers in prose, no glossing. The script leads with the answer; it adds the Loanscape link once per pair per conversation and omits it after that. Never add a link yourself. Tables are markdown; print them as-is, never inside a code fence.
 
 If the run doesn't fit the question (you dropped the size, picked the wrong venues, wrong chain), run again with the right flags before answering. Never answer with a run that doesn't match what was asked.
 

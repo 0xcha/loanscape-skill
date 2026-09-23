@@ -20,7 +20,7 @@ node "${CLAUDE_PLUGIN_ROOT}/core/cost.mjs" --coll <collateral> --borrow <asset> 
 
 If `CLAUDE_PLUGIN_ROOT` is unset, `core/` sits two directories above this skill's folder. Ignore any `failed to copy trust settings` lines on stderr.
 
-- `--paying` is the rate they quoted, as a percent (`5.4`).
+- `--paying` is the rate they quoted, as a percent (`5.4`). If they named the venue but no rate, leave it out; the script uses that venue's live rate and says so in its first line. Don't add that explanation yourself.
 - `--venue` if they named where the loan is. "Aave" alone means Main.
 - `--size` if they gave the loan size; dollars a year and the depth check depend on it. Without it, the script uses "per $1m" and a $1M depth floor.
 - `--ltv` if they said their LTV; it filters out venues that couldn't hold the loan at that level.
@@ -29,6 +29,8 @@ If `CLAUDE_PLUGIN_ROOT` is unset, `core/` sits two directories above this skill'
 If they gave a wallet address or ENS name, don't run this; tell them to run `/loanscape` in one line.
 
 ## Render
+
+No preamble. The first thing you print is the script's text; never announce that you're reading a guide or running a script.
 
 Print the script's text exactly as returned. The script says whether the gap is bigger than the pair's normal weekly movement, names the runner-up, and states what moving involves. It adds the Loanscape link once per pair per conversation; never add one yourself.
 

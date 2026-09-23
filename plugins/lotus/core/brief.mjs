@@ -14,13 +14,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { fetchOffers, deepLink } from "./lib/offers.mjs";
+import { fetchOffers, deepLink, loadMem, saveMem, memPath, venueName, pairLinkOnce } from "./lib/offers.mjs";
 import { trustedHistory } from "./lib/rules.mjs";
+import { mdTable } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const HOME = process.env.LOANSCAPE_HOME || join(homedir(), ".loanscape");
-const MEM = join(HOME, "memory.json");
-const T = { urgentDropPct: 15, urgentHealth: 1.15, urgentRateStepBps: 100, refiMinBps: 20, refiMinUsdPerYear: 100, risingDays: 3, diffPricePct: 2, diffHeadroomPts: 2, diffRateBps: 10, diffDebtPct: 1, idleMinUsd: 50, moveTargetPct: 30 };
+const MEM = memPath();
+let saved = false;
+const T = { urgentDropPct: 15, urgentHealth: 1.15, urgentRateStepBps: 100, refiMinBps: 20, refiMinUsdPerYear: 100, risingDays: 3, diffPricePct: 2, diffHeadroomPts: 2, diffRateBps: 10, diffDebtPct: 1, idleMinUsd: 50, moveTargetPct: 30, urgentLstPct: 3, urgentStablePct: 0.75 };
 
 const args = parseArgs(process.argv.slice(2));
 const mem = loadMem();
@@ -63,10 +64,14 @@ for (const p of pos.positions) {
   const name = label(p);
   const L = p.liquidationPrice;
   const dist = L?.direction === "up" ? L.risePct : L?.dropPct;
-  if ((dist != null && dist <= T.urgentDropPct) || (p.healthFactor != null && p.healthFactor < T.urgentHealth)) {
+  p.tier = riskTier(p);
+  const limit = p.tier === "stable" ? T.urgentStablePct : p.tier === "lst" ? T.urgentLstPct : T.urgentDropPct;
+  const healthUrgent = p.tier === "volatile" && p.healthFactor != null && p.healthFactor < T.urgentHealth; // stable loops run at 1.01–1.03 by design
+  if ((dist != null && dist <= limit) || healthUrgent) {
+    const verb = p.tier === "stable" ? "depegs" : "drops";
     const txt = L?.direction === "up" && dist != null ? `${name} liquidates if ${L.symbol} rises ${dist.toFixed(0)}%, to ${usd(L.price)}.`
-      : dist != null ? `${name} liquidates if ${L.symbol} drops ${dist.toFixed(0)}%, to ${usd(L.price)}.` : `${name} is close to liquidation.`;
-    findings.push({ tier: "urgent", kind: "liq", key: p.key, text: `${txt} Health ${fmtHf(p.healthFactor)}.` });
+      : dist != null ? `${name} liquidates if ${L.symbol} ${verb} ${dist.toFixed(0)}%, to ${usd(L.price)}.` : `${name} is close to liquidation.`;
+    findings.push({ tier: "urgent", kind: "liq", key: p.key, inRow: !!L?.price, text: `${txt} Health ${fmtHf(p.healthFactor)}.` });
   }
   const before = prevFor(p)?.snapshot?.[p.key];
   if (before && p.borrowApr != null && before.apr != null && Math.abs(p.borrowApr - before.apr) * 100 >= T.urgentRateStepBps) {
@@ -78,23 +83,27 @@ for (const p of pos.positions) {
     const spreadBps = (curApr - p.best.apr) * 100, perYear = (spreadBps / 10000) * partUsd;
     const what = p.pair.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)} position` : `the ${shortName(p)} loan`;
     const nowCost = (curApr / 100) * partUsd, newCost = (p.best.apr / 100) * partUsd;
-    if (spreadBps >= T.refiMinBps || perYear >= T.refiMinUsdPerYear) findings.push({ tier: "worth", key: p.key, kind: "refi", bps: Math.round(spreadBps), perYear, venue: offerShort(p.best.venue), loan: p.pair.partial ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)}` : shortName(p), text: `${offerShort(p.best.venue)} would charge ${pct(p.best.apr)} on ${what}: about ${usd(newCost)} a year instead of ${usd(nowCost)}, ${Math.round(spreadBps)} bps less, with ${usdShort(p.best.liquidityUsd)} available there.`, link: deepLink(linkSym(p.pair.coll.symbol), linkSym(p.pair.debt.symbol), null) });
+    if (spreadBps >= T.refiMinBps || perYear >= T.refiMinUsdPerYear) findings.push({ tier: "worth", key: p.key, kind: "refi", bps: Math.round(spreadBps), perYear, venue: offerShort(p.best, p), loan: p.pair.partial ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)}` : shortName(p), text: `${cap(offerShort(p.best, p))} would charge ${pct(p.best.apr)} on ${what}: about ${usd(newCost)} a year instead of ${usd(nowCost)}, ${Math.round(spreadBps)} bps less, with ${usdShort(p.best.liquidityUsd)} available there.`, link: deepLink(linkSym(p.pair.coll.symbol), linkSym(p.pair.debt.symbol), null) });
   }
-  if (p.mine?.sparkline?.length >= T.risingDays + 1) {
+  if (p.mine?.sparkline?.length >= T.risingDays + 1 && !p.mine.suspect) {
     const s = p.mine.sparkline.slice(-(T.risingDays + 1)); const rising = s.every((v, i) => i === 0 || v > s[i - 1]);
     const what = p.pair?.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} rate on ${venueShort(p)}` : `${name}'s rate`;
-    if (rising) findings.push({ tier: "worth", key: p.key, kind: "trend", text: `${what} has risen ${T.risingDays} days running, ${pct(s[0])} to ${pct(s[s.length - 1])}.` });
+    if (rising) findings.push({ tier: "worth", key: p.key, kind: "trend", name: what, from: s[0], to: s[s.length - 1], text: `${what} has risen ${T.risingDays} days running, ${pct(s[0])} to ${pct(s[s.length - 1])}.` });
   }
   if (firstRun && p.supplied?.length) {
     const idle = p.supplied.filter((c) => c.usd >= T.idleMinUsd).sort((a, b) => b.usd - a.usd);
     if (idle.length) findings.push({ tier: "worth", key: p.key, kind: "idle", text: `${idle.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" and ")} on ${venueShort(p)} ${idle.length === 1 ? "isn't" : "aren't"} enabled as collateral, so ${idle.length === 1 ? "it adds" : "they add"} no headroom to the loan.` });
   }
   if (p.mine?.recLtv != null && p.ltv != null && p.ltv * 100 > p.mine.recLtv) {
-    findings.push({ tier: "worth", key: p.key, kind: "ltv", text: `${name} sits at ${(p.ltv * 100).toFixed(0)}% LTV, above the ${p.mine.recLtv}% Loanscape treats as the working ceiling there.` });
+    const stable = p.tier !== "volatile"; // stable and LST loops both run near their ceiling by design
+    findings.push({ tier: "worth", key: p.key, kind: "ltv", name, venue: venueShort(p), pair: p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}` : null, stable, ltvPct: Math.round(p.ltv * 100), ceil: p.mine.recLtv,
+      text: stable ? `${cap(name)} sits at ${(p.ltv * 100).toFixed(0)}% LTV, which is how these markets run; the working ceiling Loanscape gives it is ${p.mine.recLtv}%.` : `${cap(name)} sits at ${(p.ltv * 100).toFixed(0)}% LTV, above the ${p.mine.recLtv}% Loanscape treats as the working ceiling there.` });
   }
 }
 const urgent = findings.filter((f) => f.tier === "urgent");
-const worth = dedupe(findings.filter((f) => f.tier === "worth")).slice(0, 2);
+const worth = collapse(dedupe(findings.filter((f) => f.tier === "worth"))).slice(0, 2);
+{ const linkMem = args.json || args.ladder || args.move || args["no-save"] ? JSON.parse(JSON.stringify(mem)) : mem;
+  for (const f of worth) if (f.kind === "refi") { const p = pos.positions.find((x) => x.key === f.key); f.linkLine = pairLinkOnce(linkMem, p.chainId, linkSym(p.pair.coll.symbol), linkSym(p.pair.debt.symbol)); } }
 
 // 4. diff since last run, per wallet, merged
 const diffs = runs.filter((r) => r.prev).map((r) => ({ r, d: computeDiff(r.prev, { positions: r.positions }) }));
@@ -106,11 +115,11 @@ const lastRunOf = () => { const ts = runs.map((r) => r.prev?.lastRun).filter(Boo
 const snapshotOf = (r) => Object.fromEntries(r.positions.map((p) => [p.key, { venue: p.venue, chainId: p.chainId, debtUsd: p.debtUsd, collateralUsd: p.collateralUsd, ltv: p.ltv, dropPct: p.liquidationPrice?.direction === "up" ? (p.liquidationPrice.risePct ?? null) : (p.liquidationPrice?.dropPct ?? null), apr: p.borrowApr, collSymbol: p.collateral[0]?.symbol ?? null, collPrice: p.collateral[0]?.priceUsd ?? null, health: p.healthFactor }]));
 if (!args["no-save"] && !args.json && !args.ladder && !args.move) {
   for (const r of runs) {
-    const keys = [...urgent, ...worth].filter((f) => r.positions.some((p) => p.key === f.key)).map((f) => f.kind + ":" + f.key);
+    const keys = [...urgent, ...worth].flatMap((f) => (f.keys || [f.key]).filter((k) => r.positions.some((p) => p.key === k)).map((k) => f.kind + ":" + k));
     mem.wallets[r.wallet] = { label: r.label, firstSeen: r.prev?.firstSeen || r.fetchedAt, lastRun: r.fetchedAt, snapshot: snapshotOf(r), findingKeys: keys, runs: (r.prev?.runs || 0) + 1 };
   }
   if (args.wallet) mem.defaultWallet = key; else if (!mem.defaultWallet) mem.defaultWallet = key;
-  saveMem(mem);
+  saved = saveMem(mem);
 }
 
 // 6. output
@@ -126,7 +135,7 @@ function render() {
   const L = [];
   const n = pos.positions.length;
   const prevKeys = new Set(runs.flatMap((r) => r.prev?.findingKeys || []));
-  const isOld = (f) => prevKeys.has(f.kind + ":" + f.key);
+  const isOld = (f) => (f.keys || [f.key]).every((k) => prevKeys.has(f.kind + ":" + k));
   if (!n) {
     L.push(`No open borrow positions for ${who}.`);
     L.push(`I read Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}. If you've got a loan elsewhere, tell me and I'll track it by hand.`);
@@ -134,7 +143,7 @@ function render() {
   }
   const verdict = urgent.length ? (urgent.length === 1 ? "One needs attention." : `${urgent.length} need attention.`) : "Nothing urgent.";
   const oldWorth = worth.filter(isOld), newWorth = worth.filter((f) => !isOld(f));
-  const still = oldWorth.map((f) => f.kind === "refi" ? `${f.venue} still ${f.bps} bps cheaper on the ${f.loan} loan, about ${usd(f.perYear)} a year.` : null).filter(Boolean);
+  const still = oldWorth.map((f) => f.kind === "refi" ? `${cap(f.venue)} still ${f.bps} bps cheaper on the ${f.loan} loan, about ${usd(f.perYear)} a year.` : null).filter(Boolean);
   const across = multi ? ` across ${runs.length} wallets` : "";
   const newWallets = runs.filter((r) => !r.prev);
   const yearly = pos.positions.reduce((t, p) => t + (p.debtUsd && p.borrowApr != null ? (p.debtUsd * p.borrowApr) / 100 : 0), 0);
@@ -147,30 +156,51 @@ function render() {
     const tail = !urgent.length && !newWorth.length && !still.length ? "Nothing to do." : verdict;
     L.push([head, tail, ...still].join(" "));
   }
-  pos.positions.forEach((p, i) => L.push(row(i + 1, p)));
+  const urgentKeys = new Set(urgent.map((u) => u.key));
+  L.push(""); L.push(table(urgentKeys));
   const detail = [];
-  urgent.forEach((u) => detail.push(cap(u.text)));
+  urgent.filter((u) => !u.inRow).forEach((u) => detail.push(cap(u.text)));
   if (newWorth.length === 1) detail.push(`One thing worth knowing: ${newWorth[0].text}`);
   else newWorth.forEach((w) => detail.push(`Worth knowing: ${w.text}`));
-  const refi = newWorth.find((w) => w.kind === "refi"); if (refi) detail.push(`Compare: ${refi.link}`);
+  const refi = newWorth.find((w) => w.kind === "refi"); if (refi?.linkLine) detail.push(refi.linkLine);
   if (urgent.some((u) => u.kind === "liq")) detail.push("Want the numbers on adding collateral or paying some down?");
   if (detail.length) { L.push(""); L.push(...detail); }
   const errs = [...new Set(pos.errors.map((e) => `${e.venue} on ${chainName(e.chainId)}`))]; if (errs.length) L.push(`Could not read ${listJoin(errs)} this time.`);
-  if (firstRun) { L.push(""); L.push(`Read Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}. I'll remember this wallet.`); L.push(`Run /loanscape any morning and I'll tell you what changed.`); }
+  if (firstRun) { L.push(""); L.push(`Checked Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}. ${saved ? "Wallet saved." : "Couldn't save this wallet here, so paste it again next time."}`); if (saved) L.push(`Run /loanscape any morning for what's changed.`); }
   return L.join("\n");
 }
-function row(i, p) {
-  const side = (list, total) => list.length <= 1 ? list.map((c) => `${amt(c.amount)} ${c.symbol}`).join("") || "no collateral" : `${list.map((c) => c.symbol).join(" + ")} (${usd(total)})`;
-  const coll = side(p.collateral, p.collateralUsd), debt = side(p.debt, p.debtUsd);
-  const L = p.liquidationPrice;
-  const risk = L?.price && L.direction === "up" ? `liquidates if ${L.symbol} rises to ${usd(L.price)} (+${L.risePct.toFixed(0)}%)`
-    : L?.price ? `liquidates at ${usd(L.price)} ${L.symbol}${L.dropPct != null ? ` (−${L.dropPct.toFixed(0)}%)` : ""}`
-    : p.healthFactor != null ? `health ${fmtHf(p.healthFactor)}` : p.note ? `(${p.note.replace(/, USD not computed$/, "")})` : "";
-  const chain = pos.chains.length > 1 && p.chainId !== 1 ? ` (${chainName(p.chainId)})` : "";
-  const wal = multi ? ` [${p.walletLabel}]` : "";
-  const rate = p.borrowApr != null ? ` at ${pct(p.borrowApr)}` : "";
-  const emode = p.emode ? " · e-mode" : "";
-  return `${i}  ${venueShort(p)}${chain}${wal}   ${coll} → ${debt}${rate}   LTV ${p.ltv != null ? (p.ltv * 100).toFixed(0) + "%" : "n/a"}${emode}   ${risk}`;
+// One markdown table, the venue table's style. Urgent rows carry the venue and health cells in bold.
+function table(urgentKeys) {
+  const H = ["venue", "collateral", "debt", "rate", "LTV", "liquidation", "health"], A = ["l", "l", "l", "r", "r", "r", "r"];
+  const rows = pos.positions.map((p) => {
+    const side = (list, total) => list.length <= 1 ? list.map((c) => `${amt(c.amount)} ${c.symbol}`).join("") || "none" : `${list.map((c) => c.symbol).join(" + ")} (${usd(total)})`;
+    const L = p.liquidationPrice;
+    const pc = (x) => (x < 1 ? x.toFixed(1) : x.toFixed(0)) + "%";
+    const liq = L?.price && L.direction === "up" ? `${L.symbol} up to ${usd(L.price)} (+${pc(L.risePct)})`
+      : L?.price ? `${usd(L.price)} ${L.symbol} (−${pc(L.dropPct)})`
+      : L?.note && /other collateral/.test(L.note) ? "covered by other collateral"
+      : p.note ? "unpriced" : "n/a";
+    const chain = pos.chains.length > 1 && p.chainId !== 1 ? ` (${chainName(p.chainId)})` : "";
+    const wal = multi ? ` [${p.walletLabel}]` : "";
+    const emode = p.emode ? " e-mode" : "";
+    return [`${venueShort(p)}${chain}${wal}${emode}`, side(p.collateral, p.collateralUsd), side(p.debt, p.debtUsd), p.borrowApr != null ? pct(p.borrowApr) : "", p.ltv != null ? `${(p.ltv * 100).toFixed(0)}%` : "n/a", liq, p.healthFactor != null ? fmtHf(p.healthFactor) : ""];
+  });
+  const hot = new Set(pos.positions.map((p, i) => (urgentKeys.has(p.key) ? i : -1)).filter((i) => i >= 0));
+  return mdTable(H, rows, A, { rows: hot, cols: [0, 6] });
+}
+
+// Collateral kind decides how much room counts as urgent. The API's coll.kind when present (eth, btc, lst, stable).
+// When the API gives no kind (un-curated assets), the collateral counts as stable if the debt is near $1 and the collateral symbol
+// contains "USD": yield-bearing stables (syrupUSDC $1.18, sUSDe $1.25) price well above $1, so a near-$1 test on both sides misses them.
+function riskTier(p) {
+  const ck = p.market?.coll?.kind || null, dk = p.market?.borrow?.kind || null;
+  const nearOne = (x) => x?.priceUsd != null && Math.abs(x.priceUsd - 1) < 0.05;
+  const debtStable = dk === "stable" || (!dk && p.debt.every(nearOne));
+  if (ck === "stable" && debtStable) return "stable";
+  if (ck === "lst" && dk === "eth") return "lst";
+  if (ck) return "volatile";
+  if (debtStable && p.collateral.every((c) => /USD/i.test(c.symbol || ""))) return "stable";
+  return "volatile";
 }
 
 // ---------------- ladder ----------------
@@ -255,7 +285,7 @@ function moveLadder(n) {
     const share = sharePct != null ? ` (your loan is ${sharePct.toFixed(1)}% of it${sharePct >= 10 ? ", enough to move the rate you came for" : ""})` : "";
     const fit = p.best.maxLtv != null && p.ltv != null ? `, max LTV ${p.best.maxLtv}% against your ${(p.ltv * 100).toFixed(0)}%` : "";
     const what = p.pair?.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part` : "it";
-    out.push(`4  Refinance: ${offerShort(p.best.venue)} at ${pct(p.best.apr)} would make ${what} ${usd(newCost)} a year instead of ${usd(nowCost)}, ${bps} bps less; ${usdShort(p.best.liquidityUsd)} available there${share}${fit}. Repay here, reborrow there, two or three transactions with gas on each.`);
+    out.push(`4  Refinance: ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} would make ${what} ${usd(newCost)} a year instead of ${usd(nowCost)}, ${bps} bps less; ${usdShort(p.best.liquidityUsd)} available there${share}${fit}. Repay here, reborrow there, two or three transactions with gas on each.`);
   } else out.push(`4  Refinance: no venue is cheaper on this pair with enough depth for your size today.`);
   // 5 close
   const back = p.collateral.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" + ");
@@ -297,6 +327,31 @@ function computeDiff(prev, pos) {
   const uniq = [...new Set(lines)];
   return { lines: uniq.slice(0, 3), all: uniq };
 }
+// Two findings from the same rule on two positions become one line naming both.
+function collapse(list) {
+  const out = []; const byKind = {};
+  for (const f of list) (byKind[f.kind] ||= []).push(f);
+  for (const [kind, fs] of Object.entries(byKind)) {
+    if (fs.length < 2 || !["ltv", "trend"].includes(kind)) { out.push(...fs); continue; }
+    const keys = fs.map((f) => f.key); const names = fs.map((f) => f.name.replace(/^the /, ""));
+    if (kind === "ltv") {
+      const ceils = [...new Set(fs.map((f) => f.ceil))]; const ltvs = fs.map((f) => f.ltvPct); const spread = Math.max(...ltvs) - Math.min(...ltvs);
+      const ltvTxt = spread <= 1 ? `at or near ${Math.round(ltvs.reduce((a, b) => a + b) / ltvs.length)}% LTV` : `at ${listJoin(ltvs.map((x) => `${x}%`))} LTV`;
+      const venues = [...new Set(fs.map((f) => f.venue))]; const allStable = fs.every((f) => f.stable);
+      const total = pos.positions.filter((p) => venues.length === 1 ? venueShort(p) === venues[0] : true).length;
+      const who = fs.length === total && venues.length === 1 ? `All ${fs.length === 2 ? "both" : words(fs.length)} ${venues[0]} loans` : `The ${venues.length === 1 ? venues[0] + " " : ""}${listJoin(fs.map((f) => (venues.length === 1 ? f.pair : `${f.venue} ${f.pair}`) || f.name))} loans`;
+      const ceilTxt = ceils.length === 1 ? (allStable ? `which is how these markets run; the working ceiling Loanscape gives them is ${ceils[0]}%` : `above the ${ceils[0]}% working ceiling there`) : `above their ${listJoin(fs.map((f) => `${f.ceil}%`))} working ceilings`;
+      out.push({ tier: "worth", kind, key: keys.join("+"), keys, text: `${who.replace("All both", "Both")} sit ${ltvTxt}, ${ceilTxt}.` });
+    } else {
+      // "the Morpho cbBTC → USDC loan's rate" → "cbBTC → USDC"; the shared venue is said once
+      const bare = names.map((n) => n.replace(/'s rate$/, "").replace(/ loan$/, "").replace(/ rate on .*$/, "")); const venues = [...new Set(bare.map((n) => n.split(" ")[0]))];
+      const pairs = venues.length === 1 ? bare.map((n) => n.split(" ").slice(1).join(" ")) : bare;
+      out.push({ tier: "worth", kind, key: keys.join("+"), keys, text: `The ${venues.length === 1 ? venues[0] + " " : ""}${listJoin(pairs)} rates have risen ${T.risingDays} days running, ${listJoin(fs.map((f) => `${pct(f.from)} to ${pct(f.to)}`))}.` });
+    }
+  }
+  return out;
+}
+function words(n) { return ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"][n] || String(n); }
 function dedupe(list) { const seen = new Set(); return list.filter((f) => { const k = f.kind + f.key; if (seen.has(k)) return false; seen.add(k); return true; }); }
 
 // ---------------- helpers ----------------
@@ -304,11 +359,13 @@ function linkSym(s) { return s === "ETH" ? "WETH" : s; }
 function posKey(p) { return `${p.chainId}:${p.protocol}:${p.marketId || p.venue}`; }
 function label(p) { return p.collateral.length === 1 && p.debt.length === 1 ? `the ${venueShort(p)} ${p.collateral[0].symbol} → ${p.debt[0].symbol} loan` : `the ${venueShort(p)} position`; }
 function shortName(p) { return venueShort(p).split(" · ")[0]; }
-function offerShort(v) { return String(v).replace(" v3", "").replace(" · Main", "").replace(" Instance", "").replace(" comet", "").replace(" vault", ""); }
+function offerShort(v, p) {
+  const label = typeof v === "string" ? v : v?.venue || "";
+  if (p?.protocol === "morpho-blue" && /^Morpho/.test(label)) { const h = label.match(/ · ([0-9a-f]{6})$/); return h ? `another Morpho market (${h[1]})` : "another Morpho market"; }
+  return venueName(typeof v === "string" ? v : v, p?.market?.offers);
+}
 function venueShort(p) { if (p.protocol === "morpho-blue") return "Morpho"; if (p.protocol === "compound-v3") return "Compound"; if (p.protocol === "fluid") return "Fluid"; return p.venue.replace(" v3", "").replace(" · Main", ""); }
 function strip(p) { const { market, supplied, ...rest } = p; return { ...rest, mine: p.mine ? { venue: p.mine.venue, apr: p.mine.apr, maxLtv: p.mine.maxLtv, recLtv: p.mine.recLtv, liquidityUsd: p.mine.liquidityUsd, stability: p.mine.stability } : null, best: p.best ? { venue: p.best.venue, apr: p.best.apr, maxLtv: p.best.maxLtv, liquidityUsd: p.best.liquidityUsd } : null }; }
-function loadMem() { try { return JSON.parse(readFileSync(MEM, "utf8")); } catch { return { version: 1, wallets: {}, defaultWallet: null }; } }
-function saveMem(m) { if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true }); writeFileSync(MEM, JSON.stringify(m, null, 2)); }
 function when(iso) { if (!iso) return "last time"; const d = new Date(iso), now = new Date(); const days = (now - d) / 86400000; if (days < 1 && now.getDate() === d.getDate()) return "earlier today"; if (days < 2 && now.getDate() - d.getDate() === 1) return "yesterday"; if (days < 7) return d.toLocaleDateString("en-US", { weekday: "long" }); return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
 function chainName(id) { return { 1: "Ethereum", 8453: "Base", 42161: "Arbitrum" }[id] || `chain ${id}`; }
 function short(a) { return a.slice(0, 6) + "…" + a.slice(-4); }

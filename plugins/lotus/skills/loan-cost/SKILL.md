@@ -32,7 +32,9 @@ Collateral: ETH, wstETH, cbBTC, WBTC. Borrow: USDC, USDT, DAI, WETH. Only pass `
 
 ## Render
 
-Print the script's text exactly as returned. Put the table in a code fence; prose stays outside. The script adds the Loanscape link once per pair per conversation; never add one yourself.
+No preamble. The first thing you print is the script's text; never announce that you're reading a guide or running a script.
+
+Print the script's text exactly as returned. The table is markdown; print it as-is, never inside a code fence. The script adds the Loanscape link once per pair per conversation; never add one yourself.
 
 If the run doesn't fit the question (wrong LTV, size dropped), run again before answering.
 

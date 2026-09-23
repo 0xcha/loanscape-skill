@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fetchOffers, deepLink, loadMem, saveMem, pairLinkOnce, venueName } from "./lib/offers.mjs";
 import { bps, fmtPerM, dollarsPerYear, trustedHistory } from "./lib/rules.mjs";
+import { mdTable, sparkline, depthBar, shareBar } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const T = JSON.parse(readFileSync(join(HERE, "tokens.json"), "utf8"));
@@ -37,6 +38,7 @@ const offerWallet = plainRead && !mem.defaultWallet && !mem.offeredWallet && mem
 if (offerWallet) mem.offeredWallet = true;
 const out = { chainId, rank, size, venues: venueFilter, pairs: pairs.map((p) => ({ ...p, offers: p.offers?.map((o) => ({ ...o, share: size && o.liquidityUsd ? size / o.liquidityUsd : null })) })), offerWallet, text: null };
 out.text = pairs.map(renderPair).join("\n\n") + (offerWallet ? "\n\nIf you're running a position, paste the wallet and I'll watch it." : "");
+function paragraphs(L) { const out = []; let inTable = false; for (const l of L) { if (l === "") continue; const isRow = l.startsWith("|"); if (isRow && !inTable) { out.push(""); inTable = true; } else if (!isRow && inTable) { out.push(""); inTable = false; } else if (!isRow) { if (out.length) out.push(""); } out.push(l); } return out.join("\n"); }
 if (!args.json) saveMem(mem);
 if (args.json) console.log(JSON.stringify(out, null, 2)); else console.log(out.text);
 
@@ -61,7 +63,7 @@ function read(pair, offers, link, p) {
   L.push(...contrasts(top, offers));
   const since = sinceAsked(p, top); if (since) L.push(since);
   if (link) L.push(link);
-  return L.join("\n");
+  return paragraphs(L);
 }
 // "Since you asked on Thursday: Spark +12 bps, Aave −30 bps." Once the last ask is over an hour old; then the snapshot refreshes.
 function sinceAsked(p, top) {
@@ -80,7 +82,7 @@ function contrasts(top, offers) {
   const L = [];
   const deepest = sortBy(offers, "liquidity")[0]; const cheapest = top[0];
   if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push(`${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)})${top.includes(deepest) ? "" : `, at ${pct(deepest.apr)}`}.`);
-  const vol = top.find((o) => o.stability === "volatile" && o.sparkline?.length > 5);
+  const vol = top.find((o) => !o.suspect && o.stability === "volatile" && o.sparkline?.length > 5);
   if (vol) L.push(`${short(vol)} ran ${pct(Math.min(...vol.sparkline), 0)} to ${pct(Math.max(...vol.sparkline), 0)} last month.`);
   if (L.length < 2) { const ltvLead = sortBy(offers, "ltv")[0]; if (ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3) L.push(`Most borrowing power is ${short(ltvLead)} at ${ltvLead.maxLtv}% LTV, for ${pct(ltvLead.apr)}.`); }
   return L.slice(0, 2);
@@ -91,9 +93,10 @@ function sized(pair, offers, link) {
   const fits = byRate.filter((o) => o.liquidityUsd && size <= o.liquidityUsd * DEPTH_SHARE);
   const stretch = byRate.filter((o) => o.liquidityUsd && size > o.liquidityUsd * DEPTH_SHARE && size <= o.liquidityUsd);
   const L = [];
-  if (!fits.length && !stretch.length) { L.push(`${pair} on ${chainName(chainId)}: nothing has ${usdShort(size)} available on this pair right now. Deepest is ${short(byRate.sort((a, b) => b.liquidityUsd - a.liquidityUsd)[0])} at ${usdShort(byRate[0].liquidityUsd)}.`); if (link) L.push(link); return L.join("\n"); }
+  if (!fits.length && !stretch.length) { L.push(`${pair} on ${chainName(chainId)}: nothing has ${usdShort(size)} available on this pair right now. Deepest is ${short(byRate.sort((a, b) => b.liquidityUsd - a.liquidityUsd)[0])} at ${usdShort(byRate[0].liquidityUsd)}.`); if (link) L.push(link); return paragraphs(L); }
   const best = fits[0] || stretch[0];
   L.push(`For ${usdShort(size)} of ${pair} on ${chainName(chainId)}: ${short(best)} at ${pct(best.apr)}, where you'd be ${pctShare(size / best.liquidityUsd)} of the book.`);
+  if (fits.length === byRate.length && byRate.length > 1) { const dearest = byRate[byRate.length - 1]; L.push(`Every venue can take ${usdShort(size)}, so the cheapest rate simply wins; the spread to ${short(dearest)} at ${pct(dearest.apr)} is about ${usdShort(dollarsPerYear(bps(dearest.apr - best.apr), size))} a year.`); }
   const cheaper = byRate.find((o) => o.apr < best.apr && o !== best);
   if (cheaper) {
     const bps = Math.round((best.apr - cheaper.apr) * 100);
@@ -102,7 +105,7 @@ function sized(pair, offers, link) {
     L.push(`Under about ${usdShort(cheaper.liquidityUsd * DEPTH_SHARE)}, ${short(cheaper)}. Above, ${short(best)}.`);
   } else if (best.maxLtv != null) L.push(`Max LTV there is ${best.maxLtv}%; ${usdShort(size)} needs about ${usdShort(size / (best.maxLtv / 100))} of ${pair.split(" → ")[0]} at the limit, more for headroom.`);
   if (link) L.push(link);
-  return L.join("\n");
+  return paragraphs(L);
 }
 // Two or more named venues.
 function headToHead(pair, offers, link, p) {
@@ -120,7 +123,7 @@ function headToHead(pair, offers, link, p) {
     if (gap && !bFunds && gap < 0) L.push(`${short(b, picks)} is ${Math.abs(gap)} bps cheaper on paper, but ${usdShort(b.liquidityUsd)} of depth won't take ${usdShort(size)}.`);
     else if (gap) L.push(`${gap > 0 ? short(a, picks) : short(b, picks)} is ${Math.abs(gap)} bps cheaper, about ${usdShort(dollarsPerYear(Math.abs(gap), size))} a year at that size${a.maxLtv != null && b.maxLtv != null && a.maxLtv !== b.maxLtv ? `; max LTV ${a.maxLtv}% against ${b.maxLtv}%` : ""}.`);
     if (link) L.push(link);
-    return L.join("\n");
+    return paragraphs(L);
   }
   const [a, b] = picks; const gap = bps(b.apr - a.apr);
   const L = [`${pair} on ${chainName(chainId)} today: ${short(a, picks)} ${pct(a.apr)} against ${short(b, picks)} ${pct(b.apr)}, ${gap} bps, ${fmtPerM(gap)}.`];
@@ -134,17 +137,25 @@ function headToHead(pair, offers, link, p) {
   }
   if (picks.length > 2) L.push(`Also ${picks.slice(2).map((o) => `${short(o, picks)} ${pct(o.apr)}`).join(", ")}.`);
   if (link) L.push(link);
-  return L.join("\n");
+  return paragraphs(L);
 }
 function table(pair, offers, link, p) {
-  const rows = sortBy(offers, rank).map((o, i) => [String(i + 1), o.venue, pct(o.apr), o.maxLtv != null ? `${o.maxLtv}%` : "", usdShort(o.liquidityUsd), o.suspect ? "n/a" : range30(o.sparkline, o.apr), o.stability || (o.suspect ? "n/a" : ""), marketNote(o), ...(size ? [o.liquidityUsd ? pctShare(size / o.liquidityUsd) : ""] : [])]);
-  const H = ["#", "venue", "borrow APR", "max LTV", "available", "30d range", "30d", "market", ...(size ? ["your share"] : [])];
-  const L = [`${pair} on ${chainName(chainId)}, ranked by ${rankLabel(rank)}, as of ${p.updatedAt?.slice(0, 16).replace("T", " ") || "now"} UTC`, ...grid(H, rows)];
-  if (offers.some((o) => o.suspect)) L.push("n/a: that venue's rate history disagrees with its live rate, so no 30-day claim is made for it.");
+  const sorted = sortBy(offers, rank);
+  const maxLiq = Math.max(...sorted.map((o) => o.liquidityUsd || 0));
+  const showDepthBar = rank === "liquidity"; const showShare = !!size;
+  const H = ["venue", "borrow APR", "max LTV", "available", ...(showDepthBar ? [""] : []), ...(showShare ? ["your share", ""] : []), "30 days", "", "market"];
+  const A = ["l", "r", "r", "r", ...(showDepthBar ? ["l"] : []), ...(showShare ? ["r", "l"] : []), "l", "l", "l"];
+  const rows = sorted.map((o) => [tableLabel(o.venue), pct(o.apr), o.maxLtv != null ? `${o.maxLtv}%` : "", usdShort(o.liquidityUsd),
+    ...(showDepthBar ? [depthBar(o.liquidityUsd, maxLiq)] : []),
+    ...(showShare ? [o.liquidityUsd ? pctShare(size / o.liquidityUsd) : "", shareBar(size, o.liquidityUsd)] : []),
+    sparkline(o.sparkline, o.apr), o.stability || "", marketNote(o)]);
+  const L = [`${pair} on ${chainName(chainId)}, ranked by ${rankLabel(rank)}, as of ${p.updatedAt?.slice(0, 16).replace("T", " ") || "now"} UTC`, "", mdTable(H, rows, A, 0), ""];
   if (p.collYield) L.push(`${p.coll} yields ${pct(p.collYield)} on its own; rates above are gross.`);
   if (link) L.push(link);
   return L.join("\n");
 }
+// Table labels keep the version but drop the instance noise: "Aave v3 · Prime Instance" → "Aave v3 Prime", "Spark · Main" → "Spark".
+function tableLabel(v) { return String(v).replace(" Instance", "").replace(" · Main", "").replace(/ · /g, " "); }
 function grid(H, rows) { const w = H.map((h, i) => Math.max(h.length, ...rows.map((r) => String(r[i]).length))); const line = (r) => r.map((c, i) => String(c).padEnd(w[i])).join("  ").trimEnd(); return [line(H), ...rows.map(line)]; }
 function marketNote(o) { const n = String(o.note || ""); if (/governance/i.test(n)) return "governance rate"; if (/isolated/i.test(n)) return "isolated market"; if (/smart/i.test(n)) return "smart collateral"; if (/pooled/i.test(n)) return "pooled"; if (/comet|base market/i.test(n)) return "pooled"; return n.toLowerCase(); }
 // ---------------- logic ----------------

@@ -1,6 +1,6 @@
 ---
 name: loanscape
-description: Your open borrow positions across Aave, Spark, Morpho, Compound and Fluid, read live and ranked by what matters, with what changed since last time. Use for /loanscape, for any wallet address or ENS name the user gives, and for questions about the user's own loan, position, LTV, liquidation or health ("check my aave loan", "am I safe", "what changed on my position"). Not for market questions with no position (borrow-rates, market-moves, loan-cost) or a quoted rate without a wallet (refinance-check). Run once with a wallet; after that, just /loanscape.
+description: The Loanscape front door. /loanscape with a pair ("eth usdc") gives the live venue table; with a wallet address or ENS name it reads your open borrow positions across Aave, Spark, Morpho, Compound and Fluid, ranks what matters, and remembers the wallet; alone it gives your brief if a wallet is remembered, otherwise the ETH/USDC table. Also use for any wallet the user pastes and for questions about their own loan, LTV, liquidation or health. Market questions in plain words go to borrow-rates, market-moves, loan-cost or refinance-check.
 allowed-tools: Bash(node *)
 metadata:
   author: Lotus Labs
@@ -14,10 +14,11 @@ This is the check-in. It reads every open borrow position for a wallet, prices e
 
 Read `core/voice.md` once. It governs every line you add.
 
-## 1. Resolve the wallet
+## 1. Route by what came with the command
 
-- `/loanscape 0x…` or `/loanscape name.eth`: use that.
-- `/loanscape` with nothing: run the script with no `--wallet`; it uses the remembered wallet. If it prints `NEED_WALLET`, ask exactly one line: "Paste a wallet address or ENS name and I'll read your positions." Then stop and wait.
+- **A pair** (`/loanscape eth usdc`, `wsteth/weth`, `btc against usdc`): the venue table. Run `core/market.mjs --coll <c> --borrow <b> --table` and print it as returned. Same flags as borrow-rates for chain, rank and size if they gave one.
+- **A wallet address or ENS name**: the position brief, below. Remember it.
+- **Nothing**: run the brief with no `--wallet`; it uses the remembered wallet. If it prints `NEED_WALLET`, run the ETH/USDC table instead and end with exactly one line: "Paste a wallet address or ENS name and I'll read your positions." Never ask before showing something.
 - Never guess a wallet from context, files, or earlier conversation unless the user gave it in this session.
 
 ## 2. Run
@@ -26,11 +27,13 @@ Read `core/voice.md` once. It governs every line you add.
 node "${CLAUDE_PLUGIN_ROOT}/core/brief.mjs" --wallet <wallet>
 ```
 
-If `CLAUDE_PLUGIN_ROOT` is unset, `core/` sits two directories above this skill's folder. Optional `--chain ethereum|base|arbitrum` narrows the read; default is all three. Ignore any `failed to copy trust settings` lines on stderr; they are macOS keychain noise. The run takes a few seconds; say nothing while it runs.
+If `CLAUDE_PLUGIN_ROOT` is unset, `core/` sits two directories above this skill's folder. Optional `--chain ethereum|base|arbitrum` narrows the read; default is all three. Ignore any `failed to copy trust settings` lines on stderr; they are macOS keychain noise. The run takes a few seconds; say nothing while it runs, and don't title or narrate the run.
 
 ## 3. Render
 
-Print the script's text exactly as returned. Do not summarise it, reorder it, add a heading, add commentary, gloss a term, or restate numbers in prose. You add nothing. The script already carries the verdict, the next move, and on the first run the coverage line. It follows the voice rules and the length cap.
+No preamble. The first thing you print is the script's text; never announce that you're reading a guide or running a script.
+
+Print the script's text exactly as returned. Do not summarise it, reorder it, add a heading, add commentary, gloss a term, or restate numbers in prose. You add nothing, ever: a good line you'd like to add belongs in the script, where everyone gets it, not in this turn. The positions are a markdown table; never wrap it or anything else in a code fence. The script already carries the verdict, the next move, and on the first run the coverage line. It follows the voice rules and the length cap.
 
 ## 4. Follow-ups
 
