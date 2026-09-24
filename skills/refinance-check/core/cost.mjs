@@ -75,6 +75,7 @@ function loanCost() {
   if (carry) L.push(`Both legs float: the yield and the borrow rate move independently, so the carry can close or flip. At ${ltvS(best.o.maxLtv) || "the venue's max"} LTV the loop allows up to ${best.o.maxLtv ? (1 / (1 - best.o.maxLtv / 100)).toFixed(1) : "?"}x exposure; liquidation risk scales with it.`);
   else if (collYield > 0) L.push(`The offset shrinks as LTV rises: at ${Math.min(ltv + 20, 90)}% LTV it is ${(collYield / (Math.min(ltv + 20, 90) / 100)).toFixed(2)} points. Rates on both sides float.`);
   const link = args.json ? null : pairLinkOnce(mem, chainId, coll, borrow, null); if (link) L.push(link);
+  if (args.bare) L.push(`Name any pair, a size or an LTV, "wstETH against USDC at 60%" say, and I'll price it.`);
   return paragraphs(L);
 }
 // Lines become paragraphs: one idea per block, tables kept intact.

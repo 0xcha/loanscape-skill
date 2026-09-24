@@ -78,7 +78,8 @@ function nextMove(top, offers, c) {
     : ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3 ? `Say borrowing power and I'll rank by it instead.`
     : kinds.has("volatile") ? `Say steadiness and I'll rank by it instead.`
     : `Give me a size and I'll pick for it.`;
-  return offerWallet ? `${move} Or paste a wallet address and I'll read your open loans.` : move;
+  const steer = args.bare ? `Name any pair or a size, "wstETH against USDC for 2m" say, and I'll rerun it.` : move;
+  return offerWallet ? `${steer} Or paste a wallet address and I'll read your open loans.` : steer;
 }
 // "Since you asked on Thursday: Spark +12 bps, Aave −30 bps." Once the last ask is over an hour old; then the snapshot refreshes.
 function sinceAsked(p, top) {

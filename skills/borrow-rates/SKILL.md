@@ -14,6 +14,16 @@ One script answers market questions the way a desk would: a ranking, one or two 
 
 Read `core/voice.md` once. It governs every line you add.
 
+## Typed alone
+
+`/borrow-rates` with nothing after it is not a question to ask back. Run the default and let the answer show what the skill does:
+
+```bash
+node "$CORE/market.mjs" --coll ETH --borrow USDC --bare
+```
+
+`--bare` makes the last line name the free-text form ("Name any pair or a size …") instead of a follow-up flag. Print it as returned; add nothing.
+
 ## Pick the mode from the question
 
 ```bash

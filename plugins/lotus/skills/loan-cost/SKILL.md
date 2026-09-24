@@ -14,6 +14,16 @@ One script nets collateral yield and rewards against the borrow rate for every d
 
 Read `core/voice.md` once. It governs every line you add.
 
+## Typed alone
+
+`/loan-cost` with nothing after it runs the pair where "what does it really cost" has a non-trivial answer, and lets the card show what the skill does:
+
+```bash
+node "$CORE/cost.mjs" --coll wstETH --borrow WETH --bare
+```
+
+`--bare` adds one last line naming the free-text form. Print it as returned; add nothing.
+
 ```bash
 node "$CORE/cost.mjs" --coll <collateral> --borrow <asset> [--size 500k] [--ltv 60] [--chain ethereum|base|arbitrum]
 ```

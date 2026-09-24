@@ -14,6 +14,16 @@ One script reads the 30-day rate history behind every venue Loanscape covers and
 
 Read `core/voice.md` once. It governs every line you add.
 
+## Typed alone
+
+`/market-moves` with nothing after it runs the cross-market read, the same as no flags, with `--bare` so the last line offers a pair:
+
+```bash
+node "$CORE/moves.mjs" --bare
+```
+
+Print it as returned; add nothing.
+
 ## Pick the scope
 
 ```bash

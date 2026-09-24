@@ -14,6 +14,14 @@ One script takes the rate the user quotes and compares it to today's deep venues
 
 Read `core/voice.md` once. It governs every line you add.
 
+## Typed alone
+
+`/refinance-check` with nothing after it can't run: it needs the rate they pay and the pair. Ask for both in one line, shaped so the answer can be copied, and nothing else:
+
+"What are you paying, and on which pair? Say 'I'm paying 5.4% on Aave for ETH/USDC' and I'll compare it."
+
+If they give a wallet address instead, that's `/loanscape`.
+
 ```bash
 node "$CORE/cost.mjs" --coll <collateral> --borrow <asset> --paying <rate> [--venue aave|prime|spark|morpho|compound|fluid] [--size 50k] [--ltv 60] [--chain ethereum|base|arbitrum]
 ```
