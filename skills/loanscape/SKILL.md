@@ -58,6 +58,7 @@ node "$CORE/brief.mjs" --ladder <row number> --shock <percent>
 node "$CORE/brief.mjs" --move <row number>
 ```
 
+- "Retry", "try again", after a brief that said it couldn't check or couldn't read some venues: rerun the same command and print it as returned. The script says which of three states it's in (checked, partly checked, couldn't check); never soften or upgrade it, and never say positions were checked when the text says they weren't.
 - "What's e-mode?" or a row tagged `e-mode`: Aave's correlated-asset mode. The position's collateral and debt are in one category (for example ETH and staked ETH, or stablecoins), so the venue allows a higher LTV and a higher liquidation threshold than the normal listing. Say it once; `--json` carries the category label under `emode.label`.
 - "What about a different pair or venue?": that is a market question; answer with the `borrow-rates` skill's script, not from memory.
 - "Add my other wallet": run the script with the new wallet. From then on, `/loanscape` with no wallet reads every remembered wallet into one brief, rows tagged with the wallet. Say that in one line the first time.

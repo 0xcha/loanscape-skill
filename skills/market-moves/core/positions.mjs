@@ -25,17 +25,19 @@ const chains = CHAIN_ARG[String(args.chain || "all").toLowerCase()];
 if (!chains) { console.error(`unknown chain "${args.chain}"`); process.exit(2); }
 
 const { address, resolvedFrom } = await resolveWallet(args.wallet);
-const positions = []; const errors = [];
+const positions = []; const errors = []; const attempted = [];
 await Promise.all([
-  ...V.aaveLike.filter((v) => chains.includes(v.chainId)).map((v) => guard(v.venue, v.chainId, () => aaveLike(v, address))),
-  ...V.comets.filter((v) => chains.includes(v.chainId)).map((v) => guard(v.venue, v.chainId, () => comet(v, address))),
-  ...chains.filter((c) => V.morpho.chains.includes(c)).map((c) => guard("Morpho Blue", c, () => morpho(c, address))),
-  ...chains.filter((c) => V.fluid.chains.includes(c)).map((c) => guard("Fluid", c, () => fluid(V.fluid, c, address, { normalise }))),
+  ...V.aaveLike.filter((v) => chains.includes(v.chainId)).map((v) => guard(v.venue, v.protocol, v.chainId, () => aaveLike(v, address))),
+  ...V.comets.filter((v) => chains.includes(v.chainId)).map((v) => guard(v.venue, "compound-v3", v.chainId, () => comet(v, address))),
+  ...chains.filter((c) => V.morpho.chains.includes(c)).map((c) => guard("Morpho Blue", "morpho-blue", c, () => morpho(c, address))),
+  ...chains.filter((c) => V.fluid.chains.includes(c)).map((c) => guard("Fluid", "fluid", c, () => fluid(V.fluid, c, address, { normalise }))),
 ]);
-async function guard(venue, chainId, fn) { try { const r = await fn(); if (r) positions.push(...r); } catch (e) { errors.push({ venue, chainId, error: String(e.message || e) }); } }
+// Every read is counted, so a caller can tell "checked and quiet" from "partly checked" from "couldn't check at all".
+async function guard(venue, protocol, chainId, fn) { attempted.push({ venue, protocol, chainId }); try { const r = await fn(); if (r) positions.push(...r); } catch (e) { errors.push({ venue, protocol, chainId, error: String(e.message || e) }); } }
+const status = !errors.length ? "ok" : errors.length >= attempted.length ? "failed" : "partial";
 
 positions.sort((a, b) => (a.healthFactor ?? 1e9) - (b.healthFactor ?? 1e9));
-const out = { wallet: address, resolvedFrom, chains, fetchedAt: new Date().toISOString(), positions, errors, coverage: coverageLine(chains) };
+const out = { wallet: address, resolvedFrom, chains, fetchedAt: new Date().toISOString(), status, attempted: attempted.length, positions, errors, coverage: coverageLine(chains) };
 if (args.json) { console.log(JSON.stringify(out, null, 2)); process.exit(0); }
 printText(out);
 
@@ -158,7 +160,8 @@ function liquidationPriceFor(p) {
 
 function printText(o) {
   const src = o.resolvedFrom ? `${o.resolvedFrom} → ${o.wallet}` : o.wallet;
-  if (!o.positions.length) { console.log(`No open borrow positions for ${src} on ${o.chains.map(chainName).join(", ")}.`); console.log(o.coverage); printErrors(o.errors); return; }
+  if (o.status === "failed") { console.log(`Could not check ${src}: every venue read failed.`); printErrors(o.errors); return; }
+  if (!o.positions.length) { console.log(`No open borrow positions for ${src} on ${o.chains.map(chainName).join(", ")}${o.status === "partial" ? " in the venues that answered" : ""}.`); printErrors(o.errors); if (o.status === "ok") console.log(o.coverage); return; }
   console.log(`${o.positions.length} open borrow position${o.positions.length === 1 ? "" : "s"} for ${src} · ${o.fetchedAt}`);
   o.positions.forEach((p, i) => {
     const coll = p.collateral.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" + ") || "no collateral";
@@ -173,7 +176,7 @@ function printText(o) {
   });
   const totalDebt = o.positions.reduce((s, p) => s + (p.debtUsd || 0), 0), totalColl = o.positions.reduce((s, p) => s + (p.collateralUsd || 0), 0);
   console.log(`total: ${usd(totalDebt)} borrowed against ${usd(totalColl)}`);
-  console.log(o.coverage); printErrors(o.errors);
+  printErrors(o.errors); if (o.status === "ok") console.log(o.coverage);
 }
 function printErrors(errs) { for (const e of errs) console.log(`could not read ${e.venue} on ${chainName(e.chainId)}: ${e.error}`); }
 function coverageLine(chains) {

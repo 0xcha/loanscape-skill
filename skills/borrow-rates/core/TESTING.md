@@ -22,6 +22,14 @@ Run with a throwaway memory: `LOANSCAPE_HOME=$TMPDIR/ls node core/brief.mjs --wa
 
 Spawn a fresh general-purpose agent with the plugin root as `CLAUDE_PLUGIN_ROOT`, a fresh `LOANSCAPE_HOME`, the instruction to read only `skills/loanscape/SKILL.md` and follow it exactly, and this script: `/loanscape <wallet>` → `should i move it?` → `what if it drops 20%?` → `/loanscape`. Ask for exactly what the user would see per turn, then a SKILL FEEDBACK section: what was ambiguous, what read wrong or long for a first-time user, where it was tempted to add text the skill forbids. Fix in the script first, the skill second. The bar: a first-time user says "wow"; a repeat user sees only what changed.
 
+## Failure states (rerun after any change to brief.mjs's read, render or memory)
+
+The brief has three states and each must read differently: checked and quiet, partly checked (`Could not read Aave, Compound and Fluid on Base this time, so a loan there isn't in this brief.`, verdicts scoped "in what I could read"), and couldn't check (`I couldn't check …`, the last good read named, memory untouched, "Say retry"). To simulate:
+
+- **All reads fail:** `HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 node core/brief.mjs` against a memory with a prior run. Check `memory.json` `lastRun` and `runs` did not change, and `--move 1` says it can't run the numbers.
+- **One chain fails:** copy `core/` to `$TMPDIR`, replace the Base endpoints in its `lib/rpc.mjs` with `https://127.0.0.1:9/x`, run the copy on `0x2c5fbd3f…fecbfe`. The Base loan must stay in the snapshot (carried, not "Closed"), and the next healthy run must not call it "New".
+- **Refinance baselines:** `0xdc6c295e…feefb` (Compound WETH → USDC) showed the chain at 3.99% and Loanscape's feed at 5.57% for the same comet on 2026-09-24, with Spark at 4.18% in between. The brief must print no refi line and `--move 1` must say "can't call it today". A refinance is only quoted when the alternative is cheaper than the chain rate; if the two readings differ by more than 25 bps it must be cheaper than both, and the smaller saving is quoted.
+
 ## Known gaps
 
 - A Morpho position's rate comes from Morpho's API (borrow APY); the trend and refi lines use Loanscape's APR for the same market. They can differ by ~10 bps.
