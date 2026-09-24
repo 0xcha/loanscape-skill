@@ -41,13 +41,15 @@ Venue names for `--venues`: `aave` (Main), `prime` (Aave Prime), `spark`, `morph
 
 No preamble. The first thing you print is the script's text; never announce that you're reading a guide or running a script.
 
-Print the script's text exactly as returned. No heading, no restating numbers in prose, no glossing. The script leads with the answer; it adds the Loanscape link once per pair per conversation and omits it after that. Never add a link yourself. Tables are markdown; print them as-is, never inside a code fence.
+Print the script's text exactly as returned, first sentence included; never rephrase it into "These are the current rates…". No heading, no restating numbers in prose, no glossing. The script leads with the answer; it adds the Loanscape link once per pair per conversation and omits it after that. Never add a link yourself. Tables are markdown; print them as-is, never inside a code fence.
 
 If the run doesn't fit the question (you dropped the size, picked the wrong venues, wrong chain), run again with the right flags before answering. Never answer with a run that doesn't match what was asked.
 
-If the text ends with "If you're running a position, paste the wallet and I'll watch it.", keep it. It appears on the first plain lookup when no wallet is remembered, once, ever, and it is how the user discovers `/loanscape`. Don't add it as a footer yourself. In a follow-up whose answer needs the user's own position (their liquidation price, their LTV), "paste the wallet and I'll read it" is the right next move and you may say it.
+A plain lookup ends with one line inviting a size or a different criterion (and, once ever, a wallet). Keep it; it is the next move. When the user answers with a criterion, run `--rank ltv|liquidity|stability`; with a size, `--size`. If the text ends with "If you're running a position, paste the wallet and I'll read it.", keep it. It appears on the first plain lookup when no wallet is remembered, once, ever, and it is how the user discovers `/loanscape`. Don't add it as a footer yourself. In a follow-up whose answer needs the user's own position (their liquidation price, their LTV), "paste the wallet and I'll read it" is the right next move and you may say it.
 
 ## Follow-ups, five lines or fewer, from the run's data
+
+- "What do you mean paste a wallet?", "what happens if I do?": answer with exactly this, nothing more: "Paste a public address or ENS name and I read your open loans on Aave, Spark, Morpho, Compound and Fluid: what you owe, how far from liquidation, and whether a cheaper venue has room for you. It's read-only; no keys, no signing. I remember the wallet, so /loanscape alone works next time. Nothing runs on its own unless you ask for a morning run."
 
 - "Why is that one cheaper?": the market column from `--table` (isolated market, governance rate, pooled, smart collateral) and its depth. A governance rate is set by vote, not by demand, so it wins on rate and moves in steps. An isolated market is one collateral against one loan asset with its own depth.
 - Reruns for follow-up numbers are fine: `--table`, `--size`, `--chain`, or `--json` for the raw rows. They don't change what the user sees unless you show them.

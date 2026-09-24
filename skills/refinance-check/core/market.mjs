@@ -37,7 +37,8 @@ const plainRead = !args.table && !size && !(venueFilter && venueFilter.length >=
 const offerWallet = plainRead && !mem.defaultWallet && !mem.offeredWallet && mem.marketQueries >= OFFER_AFTER;
 if (offerWallet) mem.offeredWallet = true;
 const out = { chainId, rank, size, venues: venueFilter, pairs: pairs.map((p) => ({ ...p, offers: p.offers?.map((o) => ({ ...o, share: size && o.liquidityUsd ? size / o.liquidityUsd : null })) })), offerWallet, text: null };
-out.text = pairs.map(renderPair).join("\n\n") + (offerWallet ? "\n\nIf you're running a position, paste the wallet and I'll watch it." : "");
+const plainReadOut = pairs.some((p) => !p.error) && plainRead;
+out.text = pairs.map(renderPair).join("\n\n") + (offerWallet && !plainReadOut ? "\n\nIf you're running a position, paste the wallet and I'll read it." : "");
 function paragraphs(L) { const out = []; let inTable = false; for (const l of L) { if (l === "") continue; const isRow = l.startsWith("|"); if (isRow && !inTable) { out.push(""); inTable = true; } else if (!isRow && inTable) { out.push(""); inTable = false; } else if (!isRow) { if (out.length) out.push(""); } out.push(l); } return out.join("\n"); }
 if (!args.json) saveMem(mem);
 if (args.json) console.log(JSON.stringify(out, null, 2)); else console.log(out.text);
@@ -59,10 +60,11 @@ function renderPair(p) {
 // One line of ranking, one or two lines of contrast, the link.
 function read(pair, offers, link, p) {
   const byRate = sortBy(offers, "rate"); const top = bestPerProtocol(byRate).slice(0, 3);
-  const L = [`${pair} on ${chainName(chainId)} right now: ${top.map((o) => `${short(o, top)} ${pct(o.apr)}`).join(", ")}.`];
+  const L = [`${pair} on ${chainName(chainId)}, cheapest by rate right now: ${top.map((o) => `${short(o, top)} ${pct(o.apr)}`).join(", ")}.`];
   L.push(...contrasts(top, offers));
   const since = sinceAsked(p, top); if (since) L.push(since);
   if (link) L.push(link);
+  L.push(offerWallet ? "Give me a size or a different criterion (borrowing power, depth, steadiness), or paste a wallet and I'll read your positions." : "Give me a size, or say by borrowing power, depth or steadiness, and I'll rank it that way.");
   return paragraphs(L);
 }
 // "Since you asked on Thursday: Spark +12 bps, Aave −30 bps." Once the last ask is over an hour old; then the snapshot refreshes.
@@ -81,7 +83,7 @@ function whenWord(iso) { const d = new Date(iso), now = new Date(); const days =
 function contrasts(top, offers) {
   const L = [];
   const deepest = sortBy(offers, "liquidity")[0]; const cheapest = top[0];
-  if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push(`${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)})${top.includes(deepest) ? "" : `, at ${pct(deepest.apr)}`}.`);
+  if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push(`${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}): under about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}, ${short(cheapest)}; above that, ${short(deepest)} at ${pct(deepest.apr)}.`);
   const vol = top.find((o) => !o.suspect && o.stability === "volatile" && o.sparkline?.length > 5);
   if (vol) L.push(`${short(vol)} ran ${pct(Math.min(...vol.sparkline), 0)} to ${pct(Math.max(...vol.sparkline), 0)} last month.`);
   if (L.length < 2) { const ltvLead = sortBy(offers, "ltv")[0]; if (ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3) L.push(`Most borrowing power is ${short(ltvLead)} at ${ltvLead.maxLtv}% LTV, for ${pct(ltvLead.apr)}.`); }
