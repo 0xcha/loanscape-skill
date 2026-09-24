@@ -101,7 +101,7 @@ function renderCross() {
   const suspect = [...new Set(scans.flatMap((sc) => sc.uniq.filter((m) => m.suspect)).map(where))];
   if (suspect.length) L[0] = L[0].replace(/ markets\.$/, ` markets; ${listJoin(suspect.slice(0, 2))} skipped, history unreliable.`);
   if (args.bare) L.push(`Name a pair, "ETH/USDC" say, for its 30-day story, or "this month" for the longer window.`);
-  return L.join("\n");
+  return L.join("\n\n"); // each line its own paragraph: a single newline renders as one run-on block in markdown
 }
 function flipsByPair(hist) {
   const out = []; const byPair = groupBy(hist.filter((m) => m.deep), (m) => m.pair);

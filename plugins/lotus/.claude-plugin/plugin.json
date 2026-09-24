@@ -1,6 +1,6 @@
 {
   "name": "lotus",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "description": "Loanscape inside your daily-driver LLM. /loanscape reads your open borrow positions across Aave, Spark, Morpho, Compound and Fluid, ranks what matters, and tells you what changed. Ask anything about borrow rates and it answers from live data.",
   "author": {
     "name": "Lotus Labs",
