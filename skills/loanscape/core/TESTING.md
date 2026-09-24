@@ -28,6 +28,9 @@ The brief has three states and each must read differently: checked and quiet, pa
 
 - **All reads fail:** `HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 node core/brief.mjs` against a memory with a prior run. Check `memory.json` `lastRun` and `runs` did not change, and `--move 1` says it can't run the numbers.
 - **One chain fails:** copy `core/` to `$TMPDIR`, replace the Base endpoints in its `lib/rpc.mjs` with `https://127.0.0.1:9/x`, run the copy on `0x2c5fbd3f…fecbfe`. The Base loan must stay in the snapshot (carried, not "Closed"), and the next healthy run must not call it "New".
+- **Quiet return:** a second run on any wallet with nothing moved prints exactly one line ("Since …: no material changes across your one position (about $X a year in interest)."); `--full` prints the rows. A partial read is never quiet: the unread line comes first.
+- **Two wallets:** add `0x761e0f09…d66c7` after `0x34A8B066…49BC`. The combined brief keeps the first wallet's rows first; `--ladder 1` and `--move 1` both name the Morpho cbBTC → USDC loan; the quiet repeat is one line carrying any standing refinance as a clause; the two "worth knowing" lines are the two largest by dollars a year.
+- **Follow-ups are cached:** after a full read, `--ladder`, `--move`, `--full` and `--json` return in well under a second and leave `memory.json` untouched; ten minutes later they read again.
 - **Refinance baselines:** `0xdc6c295e…feefb` (Compound WETH → USDC) showed the chain at 3.99% and Loanscape's feed at 5.57% for the same comet on 2026-09-24, with Spark at 4.18% in between. The brief must print no refi line and `--move 1` must say "can't call it today". A refinance is only quoted when the alternative is cheaper than the chain rate; if the two readings differ by more than 25 bps it must be cheaper than both, and the smaller saving is quoted.
 
 ## Known gaps

@@ -85,11 +85,20 @@ function refiCheck() {
   const mine = myVenue ? offers.filter((o) => matchVenue(o, myVenue)).sort((a, b) => (paying != null ? Math.abs(a.apr - paying) - Math.abs(b.apr - paying) : a.apr - b.apr))[0] : null;
   let assumed = false;
   if (paying == null) { if (!mine) return `I don't see ${myVenue} on ${pair} right now. Tell me the rate you're paying and I'll compare it.`; paying = mine.apr; assumed = true; }
+  // A quote that disagrees with the live rate by more than AGREE_BPS. On a pooled venue (one rate per borrow asset, everyone
+  // pays it) the live rate is authoritative: say so first and compare against it. On an isolated venue (Morpho, Fluid: many
+  // markets) we may not know which market they're in, so their quote stands, but the disagreement leads instead of trailing.
+  const AGREE_BPS = 25; const pooled = mine && ["aave-v3", "sparklend", "compound-v3"].includes(mine.protocol);
+  const drift = mine && !assumed ? bps(mine.apr - paying) : 0; const disagree = Math.abs(drift) > AGREE_BPS;
+  const quoted = paying; if (disagree && pooled) paying = mine.apr;
   const need = size || DEEP;
   const alts = bestPerProtocol(offers.filter((o) => o !== mine && !(mine && sameVenue(o, mine)) && (o.liquidityUsd || 0) >= need && (ltvArg == null || o.maxLtv == null || o.maxLtv >= ltvArg)).sort((a, b) => a.apr - b.apr));
   const P = [];
   const here = `on ${pair}${myVenue ? ` at ${name(mine || { venue: myVenue, protocol: myVenue }, offers)}` : ""}`;
-  const youPay = assumed ? `${name(mine, offers)} charges ${pct(paying)} ${here.replace(/ at .*$/, "")} today, so that's the rate I'm using.` : `You're paying ${pct(paying)} ${here}.`;
+  const youPay = assumed ? `${name(mine, offers)} charges ${pct(paying)} ${here.replace(/ at .*$/, "")} today, so that's the rate I'm using.`
+    : disagree && pooled ? `${name(mine, offers)}'s rate ${here.replace(/ at .*$/, "")} is ${pct(mine.apr)} right now, not the ${pct(quoted)} you quoted; everyone there pays the same rate, so I'm comparing against ${pct(mine.apr)}.`
+    : disagree ? `You quoted ${pct(quoted)} ${here}; the ${name(mine, offers)} market I can see shows ${pct(mine.apr)}, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} that. If you're in a different market there, your rate stands, so I'm comparing against ${pct(quoted)}.`
+    : `You're paying ${pct(paying)} ${here}.`;
   if (!alts.length) { P.push(`${youPay} Nothing else with ${usdShort(need)} available${ltvArg != null ? ` and ${ltvArg}% LTV room` : ""} is on this pair right now.`); return P.join("\n\n"); }
   const best = alts[0]; const gap = bps(paying - best.apr);
   const swing = typicalWeeklySwing(offers);
@@ -103,7 +112,7 @@ function refiCheck() {
     const next = alts[1] && bps(paying - alts[1].apr) > 0 ? `Next best is ${name(alts[1], offers)} at ${pct(alts[1].apr)} with ${usdShort(alts[1].liquidityUsd)} available.` : null;
     P.push([next, "Moving means repaying here and reborrowing there, two or three transactions with gas on each, and a new liquidation price at the new venue."].filter(Boolean).join(" "));
   }
-  if (mine && !assumed) { const drift = bps(mine.apr - paying); if (Math.abs(drift) >= 10) P.push(`${name(mine, offers)} shows ${pct(mine.apr)} on this pair right now, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} what you quoted; variable rates move under you.`); }
+  if (mine && !assumed && !disagree) { if (Math.abs(drift) >= 10) P.push(`${name(mine, offers)} shows ${pct(mine.apr)} on this pair right now, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} what you quoted; variable rates move under you.`); }
   else if (myVenue && !mine) P.push(`I couldn't match "${myVenue}" to a venue on this pair, so this compares against every deep venue.`);
   const link = args.json ? null : pairLinkOnce(mem, chainId, coll, borrow, null); if (link) P.push(link);
   return P.join("\n\n");

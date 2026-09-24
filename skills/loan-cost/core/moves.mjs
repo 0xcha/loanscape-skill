@@ -56,12 +56,15 @@ function stats(m) {
   const s = m.sparkline; const n = s.length;
   if (n < 2 || m.suspect) return { hasHistory: false };
   const series = [...s, m.apr]; // history then the live reading
-  const ago = series.length - 1 - days; const past = ago >= 0 ? series[ago] : series[0];
+  // The baseline is the median of the day and its neighbours, so a one-day blip N days ago doesn't read as an N-day move.
+  const ago = series.length - 1 - days; const past = ago >= 0 ? median(series.slice(Math.max(0, ago - 1), ago + 2)) : series[0];
   const change = bps(m.apr - past);
   const lo = Math.min(...series), hi = Math.max(...series);
   const posInRange = hi > lo ? (m.apr - lo) / (hi - lo) : 0.5;
   let streak = 0; for (let i = series.length - 1; i > 0; i--) { const d = series[i] - series[i - 1]; if (streak === 0) streak = d > 0 ? 1 : d < 0 ? -1 : 0; else if ((streak > 0 && d > 0) || (streak < 0 && d < 0)) streak += Math.sign(streak); else break; }
-  let biggestStep = { bps: 0, at: null }; for (let i = Math.max(1, series.length - days); i < series.length; i++) { const d = bps(series[i] - series[i - 1]); if (Math.abs(d) > Math.abs(biggestStep.bps)) biggestStep = { bps: d, daysAgo: series.length - 1 - i }; }
+  let biggestStep = { bps: 0, at: null }; for (let i = Math.max(1, series.length - days); i < series.length; i++) { const d = bps(series[i] - series[i - 1]); if (Math.abs(d) > Math.abs(biggestStep.bps)) biggestStep = { bps: d, daysAgo: series.length - 1 - i, before: series[i - 1] }; }
+  // A step the live rate has since undone (back within 40% of the step of where it started) is reported as reverted, not as current.
+  if (biggestStep.daysAgo > 0 && bps(m.apr - biggestStep.before) / biggestStep.bps <= 0.4) biggestStep.reverted = true;
   return { hasHistory: true, past, change, lo, hi, posInRange, streak, biggestStep, deep: (m.liquidityUsd || 0) >= R.minDepthUsd };
 }
 
@@ -74,7 +77,7 @@ function crossLines(sc) {
   const streaks = hist.filter((m) => m.deep && Math.abs(m.streak) >= R.streakDays && !movers.includes(m)).sort((a, b) => Math.abs(b.streak) - Math.abs(a.streak));
   const lines = [];
   movers.slice(0, 2).forEach((m, i) => lines.push(`${where(m)} ${m.change > 0 ? "up" : "down"} ${Math.abs(m.change)} bps${i === 0 && sc.chainId === 1 ? ` (${(Math.abs(m.change) / 100).toFixed(1)} points)` : ""} to ${pct(m.apr)}${edge(m)}.`));
-  for (const m of steps.slice(0, 1)) lines.push(`${where(m)} stepped ${m.biggestStep.bps > 0 ? "up" : "down"} ${Math.abs(m.biggestStep.bps)} bps in a day, ${ago(m.biggestStep.daysAgo)}.`);
+  for (const m of steps.slice(0, 1)) lines.push(`${where(m)} stepped ${m.biggestStep.bps > 0 ? "up" : "down"} ${Math.abs(m.biggestStep.bps)} bps in a day, ${ago(m.biggestStep.daysAgo)}${m.biggestStep.reverted ? `, since reverted to ${pct(m.apr)}` : ""}.`);
   for (const f of flips.slice(0, 1)) lines.push(`Cheapest venue with real depth for ${f.pair} is now ${f.to} at ${pct(f.toApr)}; ${days} days ago it was ${f.from}, now ${pct(f.fromApr)}.`);
   for (const m of streaks.slice(0, 1)) lines.push(`${where(m)} has ${m.streak > 0 ? "risen" : "fallen"} ${Math.abs(m.streak)} days running.`);
   return lines;
@@ -91,7 +94,7 @@ function renderCross() {
   const quietChains = [];
   for (const { sc } of per.slice(1)) {
     const big = sc.uniq.filter((m) => m.hasHistory && m.deep && (Math.abs(m.change) >= R.otherChainBps || Math.abs(m.biggestStep.bps) >= R.otherChainBps)).sort((a, b) => Math.abs(b.change) - Math.abs(a.change))[0];
-    if (big && L.length < 3) L.push(`On ${chainName(sc.chainId)}: ${where(big)} ${Math.abs(big.change) >= R.otherChainBps ? `${big.change > 0 ? "up" : "down"} ${Math.abs(big.change)} bps to ${pct(big.apr)}${edge(big)}` : `stepped ${big.biggestStep.bps > 0 ? "up" : "down"} ${Math.abs(big.biggestStep.bps)} bps in a day, ${ago(big.biggestStep.daysAgo)}`}.`);
+    if (big && L.length < 3) L.push(`On ${chainName(sc.chainId)}: ${where(big)} ${Math.abs(big.change) >= R.otherChainBps ? `${big.change > 0 ? "up" : "down"} ${Math.abs(big.change)} bps to ${pct(big.apr)}${edge(big)}` : `stepped ${big.biggestStep.bps > 0 ? "up" : "down"} ${Math.abs(big.biggestStep.bps)} bps in a day, ${ago(big.biggestStep.daysAgo)}${big.biggestStep.reverted ? ", since reverted" : ""}`}.`);
     else quietChains.push(chainName(sc.chainId));
   }
   if (quietChains.length) L.push(`${listJoin(quietChains)} quiet.`);
@@ -118,7 +121,7 @@ function renderPair() {
   const verdict = agree ? byCount : `${byCount} by venue, ${byDepth} where the depth is (${wnet > 0 ? "+" : ""}${Math.round(wnet)} bps weighted)`;
   const L = [`${pair} on ${chainName(chainId)}, last ${days} days: ${verdict}.`, ""];
   const ranked = [...ms].sort((a, b) => (b.deep - a.deep) || (Math.abs(b.change) - Math.abs(a.change))).slice(0, 7);
-  const rows = ranked.map((m) => [name(m, ms), pct(m.apr), Math.abs(m.change) >= 10 ? `${m.change > 0 ? "+" : "−"}${Math.abs(m.change)} bps` : "flat", sparkline(m.sparkline, m.apr), Math.abs(m.streak) >= R.streakDays && Math.abs(m.change) >= 10 ? `${Math.abs(m.streak)} days ${m.streak > 0 ? "up" : "down"}` : "", m.posInRange >= 0.9 ? "high" : m.posInRange <= 0.1 ? "low" : "", Math.abs(m.biggestStep.bps) >= R.stepBps ? `${Math.abs(m.biggestStep.bps)} bps ${m.biggestStep.bps > 0 ? "jump" : "drop"} ${ago(m.biggestStep.daysAgo)}` : "", m.deep ? "" : `thin, ${usdShort(m.liquidityUsd)}`]);
+  const rows = ranked.map((m) => [name(m, ms), pct(m.apr), Math.abs(m.change) >= 10 ? `${m.change > 0 ? "+" : "−"}${Math.abs(m.change)} bps` : "flat", sparkline(m.sparkline, m.apr), Math.abs(m.streak) >= R.streakDays && Math.abs(m.change) >= 10 ? `${Math.abs(m.streak)} days ${m.streak > 0 ? "up" : "down"}` : "", m.posInRange >= 0.9 ? "high" : m.posInRange <= 0.1 ? "low" : "", Math.abs(m.biggestStep.bps) >= R.stepBps ? `${Math.abs(m.biggestStep.bps)} bps ${m.biggestStep.bps > 0 ? "jump" : "drop"} ${ago(m.biggestStep.daysAgo)}${m.biggestStep.reverted ? ", reverted" : ""}` : "", m.deep ? "" : `thin, ${usdShort(m.liquidityUsd)}`]);
   const H = ["venue", "now", `${days}d`, "30 days", "run", "30d", "step", ""]; const A = ["l", "r", "r", "l", "l", "l", "l", "l"];
   const keep = H.map((_, i) => i < 4 || rows.some((r) => r[i])); const HH = H.filter((_, i) => keep[i]); const AA = A.filter((_, i) => keep[i]); const RR = rows.map((r) => r.filter((_, i) => keep[i]));
   L.push(mdTable(HH, RR, AA, -1));
@@ -130,6 +133,7 @@ function renderPair() {
 
 function where(m) { return m.protocol === "morpho-blue" ? `${name(m)} on ${m.pair}` : `${name(m)} ${m.borrow} borrowing`; }
 // ---------------- helpers ----------------
+function median(a) { const s = [...a].sort((x, y) => x - y); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; }
 function edge(m) { return m.posInRange >= 0.95 ? ", a 30-day high" : m.posInRange <= 0.05 ? ", a 30-day low" : ""; }
 function ago(d) { return d === 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`; }
 function name(o, ctx) { return venueName(o, ctx); }

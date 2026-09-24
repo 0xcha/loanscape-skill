@@ -27,7 +27,7 @@ Read `core/voice.md` once. It governs every line you add.
 node "$CORE/brief.mjs" --wallet <wallet>
 ```
 
-Find the scripts first: `CORE` is `$CLAUDE_PLUGIN_ROOT/core` when that variable is set (Claude Code plugin install), else the `core` folder next to this SKILL.md (Codex, Cursor and other agents), else two directories above it. Every command here runs from that folder. Optional `--chain ethereum|base|arbitrum` narrows the read; default is all three. Ignore any `failed to copy trust settings` lines on stderr; they are macOS keychain noise. The run takes a few seconds; say nothing while it runs, and don't title or narrate the run.
+Find the scripts first: `CORE` is `$CLAUDE_PLUGIN_ROOT/core` when that variable is set (Claude Code plugin install), else the `core` folder next to this SKILL.md (Codex, Cursor and other agents), else two directories above it. Every command here runs from that folder. Optional `--chain ethereum|base|arbitrum` narrows the read; default is all three. Ignore any `failed to copy trust settings` lines on stderr; they are macOS keychain noise. A fresh read takes about twenty seconds (it reads five venues on three chains); say nothing while it runs, and don't title or narrate the run. Follow-ups within ten minutes (`--json`, `--ladder`, `--move`, `--full`) reuse that read and return at once.
 
 ## 3. Render
 
@@ -45,19 +45,20 @@ node "$CORE/brief.mjs" --json
 
 Each position there carries `mine` (the user's own venue as the market sees it) and `best` (the cheapest alternative with enough depth and LTV room).
 
-- "Why is that urgent?", "how far is liquidation?", "what if ETH drops 20%?", "how much can I add or repay?": run the ladder for that row and print it as returned. It never writes memory.
+- "Why is that urgent?", "how far is liquidation?", "what if ETH drops 20%?", "how much can I add or repay?": run the ladder for that row and print it as returned. It never writes memory. The row number is the table's, top to bottom, and it stays the same whether the user asks for the ladder or the moves; "the biggest one" is the row with the largest debt, "the Morpho one" the row whose venue says Morpho. If the question fits more than one row (every loan is BTC-backed and they ask "what if BTC drops 20%?"), run it for each row and print them in order.
 
 ```bash
 node "$CORE/brief.mjs" --ladder <row number> --shock <percent>
 ```
 
   Pass `--shock` with the move the user named (20 for "drops 20%") and the first line answers that move directly; omit it for the plain ladder. It prints LTV and health at −10 / −20 / −30% on the main collateral (or +10 / +20 / +30% on the borrowed asset when the risk runs that way), the liquidation price, and the borrowing room under the venue's working ceiling or the collateral to add / debt to repay to get back under it.
-- "Should I move it?", "what are my options?", "what should I do?": run the move ladder for that row and print it as returned. It lays out the five moves cheapest first (do nothing, add collateral, repay some, refinance, close) with the numbers for each, and hands the decision back. Refinance is step four on purpose. Gas is described, never quantified; the run has no gas figure and you do not invent one.
+- "Should I move it?", "what are my options?", "what should I do?": run the move ladder for that row and print it as returned. It lays out the five moves from leaving the loan alone to closing it (do nothing, add collateral, repay some, refinance, close) with the numbers for each, and hands the decision back. Refinance is step four on purpose. Gas is described, never quantified; the run has no gas figure and you do not invent one.
 
 ```bash
 node "$CORE/brief.mjs" --move <row number>
 ```
 
+- A quiet repeat brief is one line ("Since yesterday: no material changes …"). "Show me", "show the table", "details": rerun with `--full` and print it as returned.
 - "Retry", "try again", after a brief that said it couldn't check or couldn't read some venues: rerun the same command and print it as returned. The script says which of three states it's in (checked, partly checked, couldn't check); never soften or upgrade it, and never say positions were checked when the text says they weren't.
 - "What's e-mode?" or a row tagged `e-mode`: Aave's correlated-asset mode. The position's collateral and debt are in one category (for example ETH and staked ETH, or stablecoins), so the venue allows a higher LTV and a higher liquidation threshold than the normal listing. Say it once; `--json` carries the category label under `emode.label`.
 - "What about a different pair or venue?": that is a market question; answer with the `borrow-rates` skill's script, not from memory.

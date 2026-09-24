@@ -33,6 +33,7 @@ const pairs = await Promise.all(collSyms.flatMap((c) => borrowSyms.map(async (b)
 })));
 
 const mem = loadMem(); mem.marketQueries = (mem.marketQueries || 0) + 1; mem.asked ||= {};
+if (rank !== "rate") args.table = true; // asking for a criterion is asking for the ranking, not for the rate read again
 const plainRead = !args.table && !size && !(venueFilter && venueFilter.length >= 2);
 const offerWallet = plainRead && !mem.defaultWallet && !mem.offeredWallet && mem.marketQueries >= OFFER_AFTER;
 if (offerWallet) mem.offeredWallet = true;
@@ -83,7 +84,7 @@ function whenWord(iso) { const d = new Date(iso), now = new Date(); const days =
 function contrasts(top, offers) {
   const L = [];
   const deepest = sortBy(offers, "liquidity")[0]; const cheapest = top[0];
-  if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push(`${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}): under about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}, ${short(cheapest)}; above that, ${short(deepest)} at ${pct(deepest.apr)}.`);
+  if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push(`${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}). Keeping a loan under a tenth of what's available, ${short(cheapest)} fits up to about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}; above that, ${short(deepest)} at ${pct(deepest.apr)}.`);
   const vol = top.find((o) => !o.suspect && o.stability === "volatile" && o.sparkline?.length > 5);
   if (vol) L.push(`${short(vol)} ran ${pct(Math.min(...vol.sparkline), 0)} to ${pct(Math.max(...vol.sparkline), 0)} last month.`);
   if (L.length < 2) { const ltvLead = sortBy(offers, "ltv")[0]; if (ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3) L.push(`Most borrowing power is ${short(ltvLead)} at ${ltvLead.maxLtv}% LTV, for ${pct(ltvLead.apr)}.`); }
@@ -147,11 +148,16 @@ function table(pair, offers, link, p) {
   const showDepthBar = rank === "liquidity"; const showShare = !!size;
   const H = ["venue", "borrow APR", "max LTV", "available", ...(showDepthBar ? [""] : []), ...(showShare ? ["your share", ""] : []), "30 days", "", "market"];
   const A = ["l", "r", "r", "r", ...(showDepthBar ? ["l"] : []), ...(showShare ? ["r", "l"] : []), "l", "l", "l"];
-  const rows = sorted.map((o) => [tableLabel(o.venue), pct(o.apr), o.maxLtv != null ? `${o.maxLtv}%` : "", usdShort(o.liquidityUsd),
+  const rows = sorted.map((o) => [tableLabel(o.venue), pct(o.apr), ltvS(o.maxLtv), usdShort(o.liquidityUsd),
     ...(showDepthBar ? [depthBar(o.liquidityUsd, maxLiq)] : []),
     ...(showShare ? [o.liquidityUsd ? pctShare(size / o.liquidityUsd) : "", shareBar(size, o.liquidityUsd)] : []),
     sparkline(o.sparkline, o.apr), o.stability || "", marketNote(o)]);
-  const L = [`${pair} on ${chainName(chainId)}, ranked by ${rankLabel(rank)}, as of ${p.updatedAt?.slice(0, 16).replace("T", " ") || "now"} UTC`, "", mdTable(H, rows, A, 0), ""];
+  const lead = sorted[0]; const boldCol = { rate: 1, ltv: 2, liquidity: 3, stability: 3 + (showDepthBar ? 1 : 0) + (showShare ? 2 : 0) + 2 }[rank];
+  const answer = rank === "ltv" ? `Most borrowing power on ${pair}: ${short(lead, sorted)} at ${ltvS(lead.maxLtv)} LTV, for ${pct(lead.apr)}.`
+    : rank === "liquidity" ? `Deepest on ${pair}: ${short(lead, sorted)} with ${usdShort(lead.liquidityUsd)} available, at ${pct(lead.apr)}.`
+    : rank === "stability" ? `Steadiest on ${pair} over 30 days: ${short(lead, sorted)}, ${pct(lead.apr)} now, ${pct(Math.min(...lead.sparkline, lead.apr))} to ${pct(Math.max(...lead.sparkline, lead.apr))} in the month.`
+    : `${pair} on ${chainName(chainId)}, cheapest by rate: ${short(lead, sorted)} ${pct(lead.apr)}.`;
+  const L = [answer, "", mdTable(H, rows, A, { rows: new Set([0]), cols: [0, boldCol] }), "", `Ranked by ${rankLabel(rank)}, as of ${p.updatedAt?.slice(0, 16).replace("T", " ") || "now"} UTC.`];
   if (p.collYield) L.push(`${p.coll} yields ${pct(p.collYield)} on its own; rates above are gross.`);
   if (link) L.push(link);
   return L.join("\n");
@@ -171,6 +177,7 @@ function expand(sym) { let s = String(sym).toUpperCase().replace(/^\$/, ""); s =
 function addr(chain, sym) { return (T.tokens[String(chain)] || {})[sym]; }
 function disp(sym) { return T.display[sym] || sym; }
 function chainName(id) { return { 1: "Ethereum", 8453: "Base", 42161: "Arbitrum" }[id] || `chain ${id}`; }
+function ltvS(x) { return x == null ? "" : `${Number(x).toFixed(Number.isInteger(Number(x)) ? 0 : 1)}%`; }
 function rankLabel(r) { return { rate: "lowest borrow APR", ltv: "highest max LTV", liquidity: "deepest available liquidity", stability: "steadiest 30-day rate" }[r]; }
 function short(o, ctx) { return venueName(o, ctx); }
 function pct(x, dp = 2) { return `${Number(x).toFixed(dp)}%`; }

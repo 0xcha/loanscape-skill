@@ -3,8 +3,11 @@
 // Prints the finished text; the skill passes it through. --json for the structured form.
 //
 //   node brief.mjs [--wallet <0x | name.eth>] [--chain ethereum|base|arbitrum|all] [--json] [--no-save] [--ladder <position#> [--shock <pct>]]
+//   --full prints the whole brief on a quiet repeat run, which otherwise is one line.
 //   --move <position#> prints the five moves in order of cost (do nothing, add collateral, repay some, refinance, close) with the numbers for each.
 //   With no --wallet, every remembered wallet is read into one brief. --json, --ladder and --move never write memory.
+//   A full read is cached for CACHE_MS ($LOANSCAPE_HOME/cache.json); --json, --ladder, --move and --full within that window reuse it
+//   instead of reading the chain again, so follow-ups are instant and never write memory.
 //
 // Memory: $LOANSCAPE_HOME/memory.json (default ~/.loanscape). Holds the remembered wallet(s) and the last snapshot per wallet,
 // which is what makes the second run better than the first. Nothing leaves the machine except the RPC and API reads.
@@ -14,30 +17,35 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { fetchOffers, deepLink, loadMem, saveMem, memPath, venueName, pairLinkOnce } from "./lib/offers.mjs";
+import { fetchOffers, deepLink, loadMem, saveMem, memPath, cachePath, venueName, pairLinkOnce } from "./lib/offers.mjs";
 import { trustedHistory } from "./lib/rules.mjs";
 import { mdTable } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MEM = memPath();
 let saved = false;
+const CACHE_MS = 10 * 60 * 1000;
 const T = { urgentDropPct: 15, urgentHealth: 1.15, urgentRateStepBps: 100, refiMinBps: 20, refiMinUsdPerYear: 100, risingDays: 3, diffPricePct: 2, diffHeadroomPts: 2, diffRateBps: 10, diffDebtPct: 1, idleMinUsd: 50, moveTargetPct: 30, urgentLstPct: 3, urgentStablePct: 0.75, rateAgreeBps: 25 };
 
 const args = parseArgs(process.argv.slice(2));
 const mem = loadMem();
 // One wallet when given; otherwise every remembered wallet, one brief.
-const walletArgs = args.wallet ? [args.wallet] : Object.keys(mem.wallets).length ? Object.keys(mem.wallets).sort((a, b) => (a === mem.defaultWallet ? -1 : b === mem.defaultWallet ? 1 : 0)) : [];
+// Remembered wallets read in the order they were added, so adding a second one never renumbers the first one's rows.
+const walletArgs = args.wallet ? [args.wallet] : Object.keys(mem.wallets).sort((a, b) => String(mem.wallets[a].firstSeen || "").localeCompare(String(mem.wallets[b].firstSeen || "")));
 if (!walletArgs.length) { console.log(args.json ? JSON.stringify({ needWallet: true }) : "NEED_WALLET"); process.exit(0); }
-if (args.ladder && !args.wallet && walletArgs.length > 1) walletArgs.splice(1); // a ladder is asked about one brief's numbering; use the default wallet
+// Rows are numbered as the brief printed them, whatever flag follows: ladder and move both read every remembered wallet.
 
-// 1. positions, per wallet, merged
+// 1. positions, per wallet, merged. A follow-up (--json, --ladder, --move, --full) with no --wallet reuses the last full read when fresh.
+const followUp = !args.wallet && !!(args.json || args.ladder || args.move || args.full);
+const cache = followUp ? loadCache(walletArgs) : null;
 const runs = [];
-for (const w of walletArgs) {
+if (cache) { for (const r of cache.runs) { r.prev = mem.wallets[r.wallet] || null; runs.push(r); } }
+else for (const w of walletArgs) {
   let r;
   try { r = JSON.parse(execFileSync(process.execPath, [join(HERE, "positions.mjs"), "--wallet", w, "--chain", args.chain || "all", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 24 })); }
   catch (e) { // the read itself died (ENS or every endpoint down): same state as every venue failing
     const known = /^0x[0-9a-fA-F]{40}$/.test(w) ? w.toLowerCase() : Object.keys(mem.wallets).find((k) => mem.wallets[k].label === w) || w;
-    r = { wallet: known, resolvedFrom: /^0x/i.test(w) ? null : w, chains: [], fetchedAt: new Date().toISOString(), status: "failed", positions: [], errors: [{ venue: "every venue", error: String(e.stderr || e.message || e).trim().split("\n").pop() }] };
+    r = { wallet: known, resolvedFrom: /^0x/i.test(w) ? null : w, chains: [], fetchedAt: new Date().toISOString(), status: "failed", positions: [], errors: [{ venue: "every venue", error: firstReason(String(e.stderr || e.message || e)) }] };
   }
   r.status ||= r.errors?.length ? "partial" : "ok";
   r.prev = mem.wallets[r.wallet] || null; r.label = r.resolvedFrom || r.prev?.label || null;
@@ -59,6 +67,7 @@ const prevFor = (p) => runs.find((r) => r.wallet === p.walletKey)?.prev;
 // 2. market context: the position's dominant pair (largest collateral × largest debt); partial when the position holds more than that pair
 for (const p of pos.positions) {
   p.key = posKey(p);
+  if (cache) continue;
   const c = p.collateral.filter((x) => x.address && x.usd != null).sort((a, b) => b.usd - a.usd)[0], d = p.debt.filter((x) => x.address && x.usd != null).sort((a, b) => b.usd - a.usd)[0];
   if (!c || !d) continue;
   p.pair = { coll: c, debt: d, partial: p.collateral.length > 1 || p.debt.length > 1 };
@@ -68,6 +77,7 @@ for (const p of pos.positions) {
     p.best = bestAlternative(p, m.offers);
   } catch (e) { p.marketError = String(e.message || e); }
 }
+if (!cache && status !== "failed") saveCache(walletArgs, runs); // a read that failed is never served to a follow-up
 
 // 3. findings
 const findings = [];
@@ -90,10 +100,10 @@ for (const p of pos.positions) {
   }
   const q = refiQuote(p);
   if (q && !q.uncertain && (q.bps >= T.refiMinBps || q.perYear >= T.refiMinUsdPerYear)) {
-    const what = p.pair.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)} position` : `the ${shortName(p)} loan`;
+    const what = p.pair.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)} position` : `the ${loanName(p)} loan`;
     const text = q.range ? `${cap(offerShort(p.best, p))} would charge ${pct(p.best.apr)} on ${what}: at least ${q.bps} bps and ${usd(q.perYear)} a year less than you pay now, with ${usdShort(p.best.liquidityUsd)} available there.`
       : `${cap(offerShort(p.best, p))} would charge ${pct(p.best.apr)} on ${what}: about ${usd(q.newCost)} a year instead of ${usd(q.nowCost)}, ${q.bps} bps less, with ${usdShort(p.best.liquidityUsd)} available there.`;
-    findings.push({ tier: "worth", key: p.key, kind: "refi", bps: q.bps, perYear: q.perYear, venue: offerShort(p.best, p), loan: p.pair.partial ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)}` : shortName(p), text, link: deepLink(linkSym(p.pair.coll.symbol), linkSym(p.pair.debt.symbol), null) });
+    findings.push({ tier: "worth", key: p.key, kind: "refi", value: q.perYear, bps: q.bps, perYear: q.perYear, venue: offerShort(p.best, p), loan: p.pair.partial ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)}` : loanName(p), text, link: deepLink(linkSym(p.pair.coll.symbol), linkSym(p.pair.debt.symbol), null) });
   }
   if (p.mine?.sparkline?.length >= T.risingDays + 1 && !p.mine.suspect) {
     const s = p.mine.sparkline.slice(-(T.risingDays + 1)); const rising = s.every((v, i) => i === 0 || v > s[i - 1]);
@@ -102,7 +112,7 @@ for (const p of pos.positions) {
   }
   if (firstRun && p.supplied?.length) {
     const idle = p.supplied.filter((c) => c.usd >= T.idleMinUsd).sort((a, b) => b.usd - a.usd);
-    if (idle.length) findings.push({ tier: "worth", key: p.key, kind: "idle", text: `${idle.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" and ")} on ${venueShort(p)} ${idle.length === 1 ? "isn't" : "aren't"} enabled as collateral, so ${idle.length === 1 ? "it adds" : "they add"} no headroom to the loan.` });
+    if (idle.length) findings.push({ tier: "worth", key: p.key, kind: "idle", value: idle.reduce((s, c) => s + c.usd, 0) / 100, text: `${idle.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" and ")} on ${venueShort(p)} ${idle.length === 1 ? "isn't" : "aren't"} enabled as collateral, so ${idle.length === 1 ? "it adds" : "they add"} no headroom to the loan.` });
   }
   if (p.mine?.recLtv != null && p.ltv != null && p.ltv * 100 > p.mine.recLtv) {
     const stable = p.tier !== "volatile"; // stable and LST loops both run near their ceiling by design
@@ -111,7 +121,8 @@ for (const p of pos.positions) {
   }
 }
 const urgent = findings.filter((f) => f.tier === "urgent");
-const worth = collapse(dedupe(findings.filter((f) => f.tier === "worth"))).slice(0, 2);
+// Two lines at most, the ones worth the most: a refinance by dollars a year, idle collateral by a hundredth of its value, the rest after.
+const worth = collapse(dedupe(findings.filter((f) => f.tier === "worth"))).sort((a, b) => (b.value || 0) - (a.value || 0)).slice(0, 2);
 { const linkMem = args.json || args.ladder || args.move || args["no-save"] ? JSON.parse(JSON.stringify(mem)) : mem;
   for (const f of worth) if (f.kind === "refi") { const p = pos.positions.find((x) => x.key === f.key); f.linkLine = pairLinkOnce(linkMem, p.chainId, linkSym(p.pair.coll.symbol), linkSym(p.pair.debt.symbol)); } }
 
@@ -123,7 +134,7 @@ const lastRunOf = () => { const ts = runs.map((r) => r.prev?.lastRun).filter(Boo
 
 // 5. persist, per wallet
 const snapshotOf = (r) => Object.fromEntries(r.positions.map((p) => [p.key, { venue: p.venue, chainId: p.chainId, debtUsd: p.debtUsd, collateralUsd: p.collateralUsd, ltv: p.ltv, dropPct: p.liquidationPrice?.direction === "up" ? (p.liquidationPrice.risePct ?? null) : (p.liquidationPrice?.dropPct ?? null), apr: p.borrowApr, collSymbol: p.collateral[0]?.symbol ?? null, collPrice: p.collateral[0]?.priceUsd ?? null, health: p.healthFactor }]));
-if (!args["no-save"] && !args.json && !args.ladder && !args.move && status !== "failed") {
+if (!args["no-save"] && !args.json && !args.ladder && !args.move && !cache && status !== "failed") {
   for (const r of okRuns) {
     const keys = [...urgent, ...worth].flatMap((f) => (f.keys || [f.key]).filter((k) => r.positions.some((p) => p.key === k)).map((k) => f.kind + ":" + k));
     const carried = Object.fromEntries(Object.entries(r.prev?.snapshot || {}).filter(([k, e]) => failedVenue(r, k, e) && !r.positions.some((p) => p.key === k)));
@@ -155,8 +166,9 @@ function render() {
   const errs = Object.entries(byChain).map(([c, f]) => `${listJoin([...f])} on ${chainName(Number(c))}`);
   const unread = errs.length ? `Could not read ${listJoin(errs)} this time, so a loan there isn't in this brief.` : null;
   if (status === "failed") {
-    const ens = pos.errors.map((x) => x.error || "").find((x) => /ENS name/.test(x));
-    L.push(ens ? `I couldn't check ${who}: ${ens.match(/ENS name[^\n]*/)[0].replace(/\.$/, "")}.` : `I couldn't check ${who}'s positions: none of the venues answered${reason()}.`);
+    const ens = pos.errors.map((x) => x.error || "").find((x) => /ENS name|not an address/.test(x));
+    if (ens) { L.push(`I couldn't check ${who}: ${ens.replace(/^Error:\s*/, "").replace(/\.$/, "")}.`); L.push(`Check the spelling, or paste the 0x address.`); return L.join("\n"); }
+    L.push(`I couldn't check ${who}'s positions: none of the venues answered${reason()}.`);
     const last = runs.map((r) => r.prev).filter((x) => x?.lastRun);
     if (last.length) {
       const snaps = last.flatMap((x) => Object.values(x.snapshot || {})); const debt = snaps.reduce((t, e) => t + (e.debtUsd || 0), 0);
@@ -168,24 +180,35 @@ function render() {
   if (!n) {
     if (status === "partial") { L.push(`No open borrow positions for ${who} in the venues that answered.`); L.push(unread + " Say retry and I'll read them again."); return L.join("\n"); }
     L.push(`No open borrow positions for ${who}.`);
-    L.push(`I read Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}. If you've got a loan elsewhere, tell me and I'll track it by hand.`);
+    L.push(`I read Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}.`);
     return L.join("\n");
   }
   const scope = status === "partial" ? " in what I could read" : "";
-  const verdict = urgent.length ? (urgent.length === 1 ? "One needs attention." : `${urgent.length} need attention.`) : `Nothing urgent${scope}.`;
+  // A position with no health and no LTV (an unpriced Fluid smart vault, say) was never assessed; the verdict says so instead of covering it.
+  const unpriced = pos.positions.filter((p) => p.healthFactor == null && p.ltv == null);
+  const priced = n - unpriced.length;
+  const verdict = urgent.length ? (urgent.length === 1 ? "One needs attention." : `${urgent.length} need attention.`)
+    : unpriced.length ? `Nothing urgent in the ${priced === 1 ? "one" : words(priced)} I could price${scope}; the ${listJoin(unpriced.map((p) => `${venueShort(p)} ${p.debt[0]?.symbol || ""} loan`.replace("  ", " ")))} ${unpriced.length === 1 ? "is" : "are"} unpriced and not assessed.`
+    : `Nothing urgent${scope}.`;
   const oldWorth = worth.filter(isOld), newWorth = worth.filter((f) => !isOld(f));
   const still = oldWorth.map((f) => f.kind === "refi" ? `${cap(f.venue)} still ${f.bps} bps cheaper on the ${f.loan} loan, about ${usd(f.perYear)} a year.` : null).filter(Boolean);
   const across = multi ? ` across ${runs.length} wallets` : "";
   const newWallets = runs.filter((r) => !r.prev);
   const yearly = pos.positions.reduce((t, p) => t + (p.debtUsd && p.borrowApr != null ? (p.debtUsd * p.borrowApr) / 100 : 0), 0);
   const cost = yearly >= 1 ? `, about ${usd(yearly)} a year in interest` : "";
+  const noRates = [...new Set(pos.positions.filter((p) => p.marketError).map((p) => p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}` : shortName(p)))];
+  // An incomplete check explains the gap before any assessment.
+  if (unread) { L.push(unread); L.push(""); }
   if (firstRun) L.push(`Found ${n} position${n === 1 ? "" : "s"}${across}${cost}. ${verdict}`);
   else {
     const since = when(lastRunOf());
+    // Quiet return: one line of status, the rows only on request (--full). Describes what's known; doesn't decide for the user.
+    // A standing saving doesn't make the day noisy: it rides the quiet line as one clause, so the daily user still gets one line.
+    const quiet = !diff?.lines.length && !urgent.length && !newWorth.length && !newWallets.length && !noRates.length;
+    if (quiet && status === "ok" && !args.full) return `Since ${since}: no material changes across ${multi ? `${n} positions in ${runs.length} wallets` : n === 1 ? "your one position" : `your ${n} positions`}${cost ? ` (${cost.slice(2)})` : ""}.${still.length ? " " + still.join(" ") : ""}`;
     const added = newWallets.length ? ` Added ${listJoin(newWallets.map((r) => r.label || short(r.wallet)))}.` : "";
-    const head = (diff?.lines.length ? `Since ${since}: ${diff.lines.join(" ")}` : `Since ${since}: nothing moved much.`) + added;
-    const tail = !urgent.length && !newWorth.length && !still.length ? `Nothing to do${scope}.` : verdict;
-    L.push([head, tail, ...still].join(" "));
+    const head = (diff?.lines.length ? `Since ${since}: ${diff.lines.join(" ")}` : `Since ${since}: no material changes${scope}.`) + added;
+    L.push([head, quiet ? "" : verdict, ...still].filter(Boolean).join(" "));
   }
   const urgentKeys = new Set(urgent.map((u) => u.key));
   L.push(""); L.push(table(urgentKeys));
@@ -193,11 +216,9 @@ function render() {
   urgent.filter((u) => !u.inRow).forEach((u) => detail.push(cap(u.text)));
   if (newWorth.length === 1) detail.push(`One thing worth knowing: ${newWorth[0].text}`);
   else newWorth.forEach((w) => detail.push(`Worth knowing: ${w.text}`));
-  const refi = newWorth.find((w) => w.kind === "refi"); if (refi?.linkLine) detail.push(refi.linkLine);
+  for (const w of newWorth) if (w.kind === "refi" && w.linkLine) detail.push(w.linkLine);
   if (urgent.some((u) => u.kind === "liq")) detail.push("Want the numbers on adding collateral or paying some down?");
-  const noRates = [...new Set(pos.positions.filter((p) => p.marketError).map((p) => p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}` : shortName(p)))];
   if (noRates.length) detail.push(`Loanscape's rates didn't load for ${listJoin(noRates)}, so there's no rate or refinance check on ${noRates.length === 1 ? "it" : "them"} this time.`);
-  if (unread) detail.push(unread);
   if (detail.length) { L.push(""); L.push(...detail); }
   if (firstRun) { L.push(""); L.push(`${status === "ok" ? "Checked Aave, Spark, Morpho, Compound and Fluid" : "Checked the other venues"} on ${listJoin(pos.chains.map(chainName))}. ${saved ? "Wallet saved." : "Couldn't save this wallet here, so paste it again next time."}`); if (saved) L.push(`Run /loanscape any morning for what's changed.`); }
   return L.join("\n");
@@ -259,10 +280,11 @@ function ladder(n) {
   const shock = args.shock != null ? Math.abs(Number(args.shock)) / 100 : null;
   if (shock) {
     const r = at(up ? shock : -shock); const distNow = up ? L?.risePct : L?.dropPct;
-    const left = distNow != null ? (distNow - shock * 100) : null;
+    // distance left from the shocked price, as a move of that price: (1+r)/(1+s)−1 up, 1−(1−d)/(1−s) down; not points subtracted
+    const left = distNow == null ? null : up ? ((1 + distNow / 100) / (1 + shock) - 1) * 100 : (1 - (1 - distNow / 100) / (1 - shock)) * 100;
     out.push(r.health < 1.01 && r.health >= 1 ? `${sym} ${up ? "+" : "−"}${(shock * 100).toFixed(0)}% puts ${label(p)} on the liquidation line, health ${fmtHf(r.health)}.`
       : r.health < 1 ? `${sym} ${up ? "+" : "−"}${(shock * 100).toFixed(0)}% liquidates ${label(p)}${distNow != null ? `; liquidation comes at ${up ? "+" : "−"}${distNow.toFixed(0)}%` : ""}.`
-      : `${sym} ${up ? "+" : "−"}${(shock * 100).toFixed(0)}% leaves ${label(p)} open at LTV ${(r.ltv * 100).toFixed(0)}%, health ${fmtHf(r.health)}${left != null ? `, ${left.toFixed(0)}% ${up ? "further rise" : "further drop"} from liquidation` : ""}.`);
+      : `${sym} ${up ? "+" : "−"}${(shock * 100).toFixed(0)}% leaves ${label(p)} open at LTV ${(r.ltv * 100).toFixed(0)}%, health ${fmtHf(r.health)}${left != null ? `, with liquidation a further ${left.toFixed(0)}% ${up ? "rise" : "drop"} away` : ""}.`);
   }
   out.push(`${shock ? "Now" : cap(label(p))}: LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. ${venueShort(p)} liquidates at ${ltPct}% LTV.`);
   for (const k of [0.1, 0.2, 0.3]) { const r = at(up ? k : -k); out.push(`  ${sym} ${up ? "+" : "−"}${(k * 100).toFixed(0)}%   LTV ${(r.ltv * 100).toFixed(0)}%   health ${fmtHf(r.health)}${r.health < 1 ? "   liquidated" : ""}`); }
@@ -288,7 +310,7 @@ function moveLadder(n) {
   const lt = p.liquidationThreshold; const ceil = p.mine?.recLtv != null ? p.mine.recLtv / 100 : null;
   const yearly = p.borrowApr != null ? (p.debtUsd * p.borrowApr) / 100 : null;
   const main = p.collateral.filter((c) => c.usd != null).sort((a, b) => b.usd - a.usd)[0]; const debtMain = p.debt.filter((d) => d.usd != null).sort((a, b) => b.usd - a.usd)[0];
-  const out = [`Should you move ${label(p)}? The moves, cheapest first.`];
+  const out = [`Should you move ${label(p)}? The moves, from leaving it alone to closing it.`];
   // 1 do nothing
   const stand = [yearly != null ? `${usd(yearly)} a year` : null, dist != null ? `liquidation ${up ? "a " + dist.toFixed(0) + "% rise" : "a " + dist.toFixed(0) + "% drop"} away` : p.healthFactor != null ? `health ${fmtHf(p.healthFactor)}` : null, ceil != null ? (p.ltv <= ceil ? `under the ${(ceil * 100).toFixed(0)}% working ceiling` : `over the ${(ceil * 100).toFixed(0)}% working ceiling`) : null].filter(Boolean);
   out.push(`1  Do nothing: ${stand.join(", ")}.`);
@@ -314,10 +336,12 @@ function moveLadder(n) {
   const q = refiQuote(p);
   if (q?.uncertain) {
     out.push(`4  Refinance: can't call it today. The chain shows ${p.pair?.partial ? "this part" : "this loan"} at ${pct(q.chain)}; Loanscape's feed has the same market at ${pct(q.feed)}. ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} is cheaper than one reading and not the other, so there's no saving to claim until they agree.`);
+  } else if (q && q.bps < T.refiMinBps && q.perYear < T.refiMinUsdPerYear) {
+    out.push(`4  Refinance: nothing worth a move today. The cheapest alternative with room, ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)}, is ${q.bps} bps less, about ${usd(q.perYear)} a year, under the $${T.refiMinUsdPerYear} a year the brief treats as worth mentioning.`);
   } else if (q) {
     const partUsd = q.partUsd;
     const sharePct = p.best.liquidityUsd ? (partUsd / p.best.liquidityUsd) * 100 : null;
-    const share = sharePct != null ? ` (your loan is ${sharePct.toFixed(1)}% of it${sharePct >= 10 ? ", enough to move the rate you came for" : ""})` : "";
+    const share = sharePct != null ? ` (your loan is ${sharePct < 0.1 ? "under 0.1%" : sharePct.toFixed(1) + "%"} of it${sharePct >= 10 ? ", enough to move the rate you came for" : ""})` : "";
     const fit = p.best.maxLtv != null && p.ltv != null ? `, max LTV ${p.best.maxLtv}% against your ${(p.ltv * 100).toFixed(0)}%` : "";
     const what = p.pair?.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part` : "it";
     const saving = q.range ? `would save at least ${q.bps} bps and ${usd(q.perYear)} a year on ${what} (the chain and Loanscape's feed read your rate ${pct(q.chain)} and ${pct(q.feed)}; the smaller saving is the one quoted)` : `would make ${what} ${usd(q.newCost)} a year instead of ${usd(q.nowCost)}, ${q.bps} bps less`;
@@ -364,6 +388,8 @@ function refiQuote(p) {
   if (p.best.apr < lo) return mk(lo, { range: true });
   return { uncertain: true, chain: b.chain, feed: b.feed, partUsd };
 }
+// The line that says why a read died: an ENS or address complaint if there is one, else the thrown error, never Node's version footer.
+function firstReason(t) { const lines = t.split("\n").map((l) => l.trim()).filter(Boolean); return lines.find((l) => /^\w*Error:.*(ENS name|not an address)/.test(l)) || lines.find((l) => /^\w*Error:/.test(l)) || lines[0] || t; }
 function reason() {
   const e = pos.errors.map((x) => x.error || "").join(" ");
   return /429|rate.?limit|too many|capacity/i.test(e) ? " (the public endpoints were rate-limiting)" : /timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|fetch failed|Could not resolve/i.test(e) ? " (the network didn't reach them)" : "";
@@ -417,6 +443,11 @@ function linkSym(s) { return s === "ETH" ? "WETH" : s; }
 function posKey(p) { return `${p.chainId}:${p.protocol}:${p.marketId || p.venue}`; }
 function label(p) { return p.collateral.length === 1 && p.debt.length === 1 ? `the ${venueShort(p)} ${p.collateral[0].symbol} → ${p.debt[0].symbol} loan` : `the ${venueShort(p)} position`; }
 function shortName(p) { return venueShort(p).split(" · ")[0]; }
+// "Morpho" when it's the only Morpho loan, "Morpho cbBTC → USDC" when another loan shares the venue.
+function loanName(p) { const v = shortName(p); const dup = pos.positions.some((x) => x !== p && shortName(x) === v); return dup && p.pair ? `${v} ${p.pair.coll.symbol} → ${p.pair.debt.symbol}` : v; }
+function cacheKey(ws) { return `${args.chain || "all"}|${[...ws].map((w) => w.toLowerCase()).sort().join(",")}`; }
+function loadCache(ws) { const p = cachePath(); if (!p) return null; try { const c = JSON.parse(readFileSync(p, "utf8")); if (c.key !== cacheKey(ws) || Date.now() - new Date(c.at).getTime() > CACHE_MS) return null; return c; } catch { return null; } }
+function saveCache(ws, rs) { const p = cachePath(); if (!p) return; try { writeFileSync(p, JSON.stringify({ key: cacheKey(ws), at: new Date().toISOString(), runs: rs.map(({ prev, ...r }) => r) })); } catch {} }
 function offerShort(v, p) {
   const label = typeof v === "string" ? v : v?.venue || "";
   if (p?.protocol === "morpho-blue" && /^Morpho/.test(label)) { const h = label.match(/ · ([0-9a-f]{6})$/); return h ? `another Morpho market (${h[1]})` : "another Morpho market"; }

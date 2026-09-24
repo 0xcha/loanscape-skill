@@ -21,7 +21,7 @@ npx skills add 0xcha/loanscape-skill
 
 Or by hand, for Codex: `git clone https://github.com/0xcha/loanscape-skill && cp -R loanscape-skill/skills/* ~/.codex/skills/`. Then `$loanscape`, or just ask a borrow question. Untested in Codex as of 2026-09-23; the format is the shared one, the trigger and shell behaviour aren't verified there.
 
-**claude.ai / Claude desktop:** zip `plugins/lotus/skills/loanscape/` and upload it under Settings → Features → Skills. Requires code execution on and a network setting that allows outbound requests.
+**claude.ai / Claude desktop:** zip the `skills/loanscape/` folder (the self-contained copy, scripts included) and upload it under Settings → Features → Skills. Requires code execution on and a network setting that allows outbound requests.
 
 Then turn on auto-update for the `lotus-labs` marketplace once (`/plugin` → Marketplaces → lotus-labs → enable auto-update), and every version bump reaches you at your next launch.
 
@@ -87,7 +87,7 @@ If `update` still says it's at the latest version, `claude plugin uninstall lotu
 
 ## Telemetry
 
-Requests carry `User-Agent: loanscape-skill/<version>` and `X-Loanscape-Client: claude-skill`; links carry `?src=claude-skill`. That is what lets Lotus report agent-routed queries as their own line, separate from browser users. No user data leaves the machine.
+Requests carry `User-Agent: loanscape-skill/<version>` and `X-Loanscape-Client: claude-skill`; links carry `?src=claude-skill`. That is what lets Lotus report agent-routed queries as their own line, separate from browser users. Your saved memory (remembered wallets and the last snapshot) stays on your machine. To read a wallet, its public address is sent to public RPC providers (publicnode, dRPC, Ankr and others) and to Morpho's API; the Loanscape API only ever receives the pair being priced, never the wallet. Reading a wallet needs no keys and no signature.
 
 ## core/positions.mjs (added 2026-09-22; now at plugins/lotus/core/)
 

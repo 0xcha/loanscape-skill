@@ -23,7 +23,10 @@ function writable(dir) { try { if (!existsSync(dir)) mkdirSync(dir, { recursive:
 let HOME = null;
 export function memHome() { if (HOME !== null) return HOME; for (const d of CANDIDATES) { if (writable(d)) { HOME = d; return HOME; } } HOME = ""; return HOME; }
 export function memPath() { const h = memHome(); return h ? join(h, "memory.json") : null; }
-export function loadMem() { for (const d of CANDIDATES) { try { return JSON.parse(readFileSync(join(d, "memory.json"), "utf8")); } catch {} } return { version: 1, wallets: {}, defaultWallet: null }; }
+// Read from the same home we write to, never from another candidate: a fresh LOANSCAPE_HOME must not see ~/.loanscape,
+// and "forget my wallet" must not bring back a wallet saved somewhere else.
+export function loadMem() { const p = memPath(); if (p) { try { return JSON.parse(readFileSync(p, "utf8")); } catch {} } return { version: 1, wallets: {}, defaultWallet: null }; }
+export function cachePath() { const h = memHome(); return h ? join(h, "cache.json") : null; }
 export function saveMem(m) { const p = memPath(); if (!p) return false; try { writeFileSync(p, JSON.stringify(m, null, 2)); return true; } catch { return false; } }
 // Returns the link line for this pair if it hasn't been offered recently, and marks it offered in `mem` (caller saves).
 export function pairLinkOnce(mem, chainId, collSym, borrowSym, rank = null) {
