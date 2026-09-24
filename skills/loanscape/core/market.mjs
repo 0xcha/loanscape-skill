@@ -62,11 +62,23 @@ function renderPair(p) {
 function read(pair, offers, link, p) {
   const byRate = sortBy(offers, "rate"); const top = bestPerProtocol(byRate).slice(0, 3);
   const L = [`${pair} on ${chainName(chainId)}, cheapest by rate right now: ${top.map((o) => `${short(o, top)} ${pct(o.apr)}`).join(", ")}.`];
-  L.push(...contrasts(top, offers));
+  const c = contrasts(top, offers); L.push(...c.map((x) => x.text));
   const since = sinceAsked(p, top); if (since) L.push(since);
   if (link) L.push(link);
-  L.push(offerWallet ? "Give me a size or a different criterion (borrowing power, depth, steadiness), or paste a wallet address and I'll read your open loans." : "Give me a size, or say by borrowing power, depth or steadiness, and I'll rank it that way.");
+  L.push(nextMove(top, offers, c));
   return paragraphs(L);
+}
+// One next move, chosen from what the read showed, not a menu of what the script can do.
+// Depth decided the answer: ask the size. Another venue leads on LTV: offer that ranking. The cheapest swings: offer steadiness.
+// The once-ever wallet offer rides the same line, so a first lookup still ends in one line.
+function nextMove(top, offers, c) {
+  const cheapest = top[0]; const kinds = new Set(c.map((x) => x.kind));
+  const ltvLead = sortBy(offers, "ltv")[0];
+  const move = kinds.has("depth") ? `What size? The answer flips at about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}.`
+    : ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3 ? `Say borrowing power and I'll rank by it instead.`
+    : kinds.has("volatile") ? `Say steadiness and I'll rank by it instead.`
+    : `Give me a size and I'll pick for it.`;
+  return offerWallet ? `${move} Or paste a wallet address and I'll read your open loans.` : move;
 }
 // "Since you asked on Thursday: Spark +12 bps, Aave −30 bps." Once the last ask is over an hour old; then the snapshot refreshes.
 function sinceAsked(p, top) {
@@ -84,10 +96,10 @@ function whenWord(iso) { const d = new Date(iso), now = new Date(); const days =
 function contrasts(top, offers) {
   const L = [];
   const deepest = sortBy(offers, "liquidity")[0]; const cheapest = top[0];
-  if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push(`${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}). Keeping a loan under a tenth of what's available, ${short(cheapest)} fits up to about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}; above that, ${short(deepest)} at ${pct(deepest.apr)}.`);
+  if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push({ kind: "depth", text: `${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}). Keeping a loan under a tenth of what's available, ${short(cheapest)} fits up to about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}; above that, ${short(deepest)} at ${pct(deepest.apr)}.` });
   const vol = top.find((o) => !o.suspect && o.stability === "volatile" && o.sparkline?.length > 5);
-  if (vol) L.push(`${short(vol)} ran ${pct(Math.min(...vol.sparkline), 0)} to ${pct(Math.max(...vol.sparkline), 0)} last month.`);
-  if (L.length < 2) { const ltvLead = sortBy(offers, "ltv")[0]; if (ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3) L.push(`Most borrowing power is ${short(ltvLead)} at ${ltvLead.maxLtv}% LTV, for ${pct(ltvLead.apr)}.`); }
+  if (vol) L.push({ kind: "volatile", text: `${short(vol)} ran ${pct(Math.min(...vol.sparkline), 0)} to ${pct(Math.max(...vol.sparkline), 0)} last month.` });
+  if (L.length < 2) { const ltvLead = sortBy(offers, "ltv")[0]; if (ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3) L.push({ kind: "ltv", text: `Most borrowing power is ${short(ltvLead)} at ${ltvS(ltvLead.maxLtv)} LTV, for ${pct(ltvLead.apr)}.` }); }
   return L.slice(0, 2);
 }
 // At a given size: who can take it, who is cheapest among them, where the crossover sits.
