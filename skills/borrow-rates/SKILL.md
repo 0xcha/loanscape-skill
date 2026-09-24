@@ -45,7 +45,7 @@ Print the script's text exactly as returned, first sentence included; never reph
 
 If the run doesn't fit the question (you dropped the size, picked the wrong venues, wrong chain), run again with the right flags before answering. Never answer with a run that doesn't match what was asked.
 
-A plain lookup ends with one line inviting a size or a different criterion (and, once ever, a wallet). Keep it; it is the next move. When the user answers with a criterion, run `--rank ltv|liquidity|stability`; with a size, `--size`. If the text ends with "If you're running a position, paste the wallet and I'll read it.", keep it. It appears on the first plain lookup when no wallet is remembered, once, ever, and it is how the user discovers `/loanscape`. Don't add it as a footer yourself. In a follow-up whose answer needs the user's own position (their liquidation price, their LTV), "paste the wallet and I'll read it" is the right next move and you may say it.
+A plain lookup ends with one line inviting a size or a different criterion (and, once ever, a wallet). Keep it; it is the next move. When the user answers with a criterion, run `--rank ltv|liquidity|stability`; with a size, `--size`. If the text ends with "Paste a wallet address and I'll read your open loans.", keep it. It appears on the first plain lookup when no wallet is remembered, once, ever, and it is how the user discovers `/loanscape`. Don't add it as a footer yourself. In a follow-up whose answer needs the user's own position (their liquidation price, their LTV), "Paste a wallet address and I'll read your open loans" is the right next move and you may say it.
 
 ## Follow-ups, five lines or fewer, from the run's data
 

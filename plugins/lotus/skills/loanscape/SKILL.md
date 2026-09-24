@@ -18,7 +18,7 @@ Read `core/voice.md` once. It governs every line you add.
 
 - **A pair, or just a collateral** (`/loanscape eth usdc`, `wsteth/weth`, `btc against usdc`, or `/loanscape btc` which means BTC against USDC): the venue table. Run `core/market.mjs --coll <c> --borrow <b> --table` and print it as returned. Same flags as borrow-rates for chain, rank and size if they gave one.
 - **A wallet address or ENS name**: the position brief, below. Remember it.
-- **Nothing**: run the brief with no `--wallet`; it uses the remembered wallet. If it prints `NEED_WALLET`, run the ETH/USDC table instead and end with exactly one line: "Paste a wallet address or ENS name and I'll read your positions." Never ask before showing something.
+- **Nothing**: run the brief with no `--wallet`; it uses the remembered wallet. If it prints `NEED_WALLET`, run the ETH/USDC table instead and end with exactly one line: "Paste a wallet address and I'll read your open loans." Never ask before showing something.
 - Never guess a wallet from context, files, or earlier conversation unless the user gave it in this session.
 
 ## 2. Run

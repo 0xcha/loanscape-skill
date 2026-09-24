@@ -39,7 +39,7 @@ const offerWallet = plainRead && !mem.defaultWallet && !mem.offeredWallet && mem
 if (offerWallet) mem.offeredWallet = true;
 const out = { chainId, rank, size, venues: venueFilter, pairs: pairs.map((p) => ({ ...p, offers: p.offers?.map((o) => ({ ...o, share: size && o.liquidityUsd ? size / o.liquidityUsd : null })) })), offerWallet, text: null };
 const plainReadOut = pairs.some((p) => !p.error) && plainRead;
-out.text = pairs.map(renderPair).join("\n\n") + (offerWallet && !plainReadOut ? "\n\nIf you're running a position, paste the wallet and I'll read it." : "");
+out.text = pairs.map(renderPair).join("\n\n") + (offerWallet && !plainReadOut ? "\n\nPaste a wallet address and I'll read your open loans." : "");
 function paragraphs(L) { const out = []; let inTable = false; for (const l of L) { if (l === "") continue; const isRow = l.startsWith("|"); if (isRow && !inTable) { out.push(""); inTable = true; } else if (!isRow && inTable) { out.push(""); inTable = false; } else if (!isRow) { if (out.length) out.push(""); } out.push(l); } return out.join("\n"); }
 if (!args.json) saveMem(mem);
 if (args.json) console.log(JSON.stringify(out, null, 2)); else console.log(out.text);
@@ -65,7 +65,7 @@ function read(pair, offers, link, p) {
   L.push(...contrasts(top, offers));
   const since = sinceAsked(p, top); if (since) L.push(since);
   if (link) L.push(link);
-  L.push(offerWallet ? "Give me a size or a different criterion (borrowing power, depth, steadiness), or paste a wallet and I'll read your positions." : "Give me a size, or say by borrowing power, depth or steadiness, and I'll rank it that way.");
+  L.push(offerWallet ? "Give me a size or a different criterion (borrowing power, depth, steadiness), or paste a wallet address and I'll read your open loans." : "Give me a size, or say by borrowing power, depth or steadiness, and I'll rank it that way.");
   return paragraphs(L);
 }
 // "Since you asked on Thursday: Spark +12 bps, Aave −30 bps." Once the last ask is over an hour old; then the snapshot refreshes.
