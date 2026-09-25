@@ -136,7 +136,8 @@ function renderPair() {
 function where(m) { return m.protocol === "morpho-blue" ? `${name(m)} on ${m.pair}` : `${name(m)} ${m.borrow} borrowing`; }
 // ---------------- helpers ----------------
 function median(a) { const s = [...a].sort((x, y) => x - y); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; }
-function edge(m) { return m.posInRange >= 0.95 ? ", a 30-day high" : m.posInRange <= 0.05 ? ", a 30-day low" : ""; }
+// Same rule as the pair table: "a 30-day high" only at the month's high; the top or bottom decile is "near".
+function edge(m) { return m.apr >= m.hi - 0.005 ? ", a 30-day high" : m.apr <= m.lo + 0.005 ? ", a 30-day low" : m.posInRange >= 0.9 ? ", near a 30-day high" : m.posInRange <= 0.1 ? ", near a 30-day low" : ""; }
 function ago(d) { return d === 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`; }
 function name(o, ctx) { return venueName(o, ctx); }
 function groupBy(list, f) { const o = {}; for (const x of list) (o[f(x)] ||= []).push(x); return o; }
