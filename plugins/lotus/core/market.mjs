@@ -39,11 +39,24 @@ const offerWallet = plainRead && !mem.defaultWallet && !mem.offeredWallet && mem
 if (offerWallet) mem.offeredWallet = true;
 const out = { chainId, rank, size, venues: venueFilter, pairs: pairs.map((p) => ({ ...p, offers: p.offers?.map((o) => ({ ...o, share: size && o.liquidityUsd ? size / o.liquidityUsd : null })) })), offerWallet, text: null };
 const plainReadOut = pairs.some((p) => !p.error) && plainRead;
-out.text = pairs.map(renderPair).join("\n\n") + (offerWallet && !plainReadOut ? "\n\nPaste a wallet address and I'll read your open loans." : "");
+out.text = mergeBtc(pairs).map(renderPair).join("\n\n") + (offerWallet && !plainReadOut ? "\n\nPaste a wallet address and I'll read your open loans." : "");
 function paragraphs(L) { const out = []; let inTable = false; for (const l of L) { if (l === "") continue; const isRow = l.startsWith("|"); if (isRow && !inTable) { out.push(""); inTable = true; } else if (!isRow && inTable) { out.push(""); inTable = false; } else if (!isRow) { if (out.length) out.push(""); } out.push(l); } return out.join("\n"); }
 if (!args.json) saveMem(mem);
 if (args.json) console.log(JSON.stringify(out, null, 2)); else console.log(out.text);
 
+// "BTC" runs cbBTC and WBTC. When the same venues rank the same on both (pooled venues price the borrow asset, not the collateral),
+// the plain read prints once, headed "cbBTC or WBTC → USDC", instead of two near-identical answers with two next moves.
+function mergeBtc(ps) {
+  if (ps.length !== 2 || !plainRead || ps.some((p) => p.error)) return ps;
+  const best = (p) => Object.fromEntries(bestPerProtocol(sortBy(p.offers, "rate")).map((o) => [o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""), o]));
+  const A = best(ps[0]), B = best(ps[1]);
+  const diffs = Object.keys(A).filter((k) => B[k] && Math.abs(bps(A[k].apr - B[k].apr)) >= 3).map((k) => `${short(A[k])} ${pct(B[k].apr)} against ${pct(A[k].apr)}`);
+  const same = Object.keys(A).filter((k) => B[k] && Math.abs(bps(A[k].apr - B[k].apr)) < 3).map((k) => short(A[k]));
+  if (diffs.length > 1) return ps; // they really do price differently; two reads it is
+  const note = diffs.length ? `${ps[1].coll} prices the same at ${listJoin(same)}; the one difference is ${diffs[0]} for ${ps[0].coll}.` : `${ps[1].coll} prices the same at every venue here.`;
+  return [{ ...ps[0], coll: `${ps[0].coll} or ${ps[1].coll}`, linkColl: ps[0].coll, btcNote: note }];
+}
+function listJoin(a) { return a.length <= 1 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1]; }
 // ---------------- render ----------------
 function renderPair(p) {
   const pair = `${p.coll} → ${p.borrow}`;
@@ -51,7 +64,7 @@ function renderPair(p) {
   let offers = p.offers;
   if (venueFilter) offers = offers.filter((o) => venueFilter.some((v) => matchVenue(o, v)));
   if (!offers.length) return `${pair} on ${chainName(chainId)}: no venues ${venueFilter ? `matching ${venueFilter.join(", ")}` : "returned"} right now.`;
-  const link = args.json ? null : pairLinkOnce(mem, chainId, p.coll, p.borrow, { ltv: "capeff", liquidity: "liq", stability: "stable" }[rank] || null);
+  const link = args.json ? null : pairLinkOnce(mem, chainId, p.linkColl || p.coll, p.borrow, { ltv: "capeff", liquidity: "liq", stability: "stable" }[rank] || null);
   if (args.table) return table(pair, offers, link, p);
   if (venueFilter && venueFilter.length >= 2) return headToHead(pair, offers, link, p);
   if (size) return sized(pair, offers, link);
@@ -61,8 +74,15 @@ function renderPair(p) {
 // One line of ranking, one or two lines of contrast, the link.
 function read(pair, offers, link, p) {
   const byRate = sortBy(offers, "rate"); const top = bestPerProtocol(byRate).slice(0, 3);
+  if (venueFilter && venueFilter.length === 1) { // one venue asked for: its numbers, no ranking claimed
+    const o = top[0]; const L = [`${short(o)} on ${pair}, ${chainName(chainId)}: ${pct(o.apr)} right now, ${usdShort(o.liquidityUsd)} available${o.maxLtv != null ? `, max LTV ${ltvS(o.maxLtv)}` : ""}${o.stability && !o.suspect ? `, ${o.stability} over 30 days` : ""}.`];
+    if (link) L.push(link);
+    L.push(`Ask without the venue name and I'll rank every venue on the pair.`);
+    return paragraphs(L);
+  }
   const L = [`${pair} on ${chainName(chainId)}, cheapest by rate right now: ${top.map((o) => `${short(o, top)} ${pct(o.apr)}`).join(", ")}.`];
   const c = contrasts(top, offers); L.push(...c.map((x) => x.text));
+  if (p.btcNote) L.push(p.btcNote);
   const since = sinceAsked(p, top); if (since) L.push(since);
   if (link) L.push(link);
   L.push(nextMove(top, offers, c));
@@ -137,7 +157,7 @@ function headToHead(pair, offers, link, p) {
     const L = [`For ${usdShort(size)} of ${pair} on ${chainName(chainId)}: ${short(a, picks)} ${pct(a.apr)}, where you'd be ${pctShare(size / a.liquidityUsd)} of the book${b.liquidityUsd && size <= b.liquidityUsd ? `; ${short(b, picks)} ${pct(b.apr)}, ${pctShare(size / b.liquidityUsd)} of its book` : `; ${short(b, picks)} only has ${usdShort(b.liquidityUsd)} available`}.`];
     const gap = bps(b.apr - a.apr); const bFunds = b.liquidityUsd && size <= b.liquidityUsd;
     if (gap && !bFunds && gap < 0) L.push(`${short(b, picks)} is ${Math.abs(gap)} bps cheaper on paper, but ${usdShort(b.liquidityUsd)} of depth won't take ${usdShort(size)}.`);
-    else if (gap) L.push(`${gap > 0 ? short(a, picks) : short(b, picks)} is ${Math.abs(gap)} bps cheaper, about ${usdShort(dollarsPerYear(Math.abs(gap), size))} a year at that size${a.maxLtv != null && b.maxLtv != null && a.maxLtv !== b.maxLtv ? `; max LTV ${a.maxLtv}% against ${b.maxLtv}%` : ""}.`);
+    else if (gap) L.push(`${gap > 0 ? short(a, picks) : short(b, picks)} is ${Math.abs(gap)} bps cheaper, about ${usdShort(dollarsPerYear(Math.abs(gap), size))} a year at that size${a.maxLtv != null && b.maxLtv != null && a.maxLtv !== b.maxLtv ? `; max LTV ${ltvS(a.maxLtv)} against ${ltvS(b.maxLtv)}` : ""}.`);
     if (link) L.push(link);
     return paragraphs(L);
   }
@@ -146,7 +166,7 @@ function headToHead(pair, offers, link, p) {
   if (a.liquidityUsd && b.liquidityUsd && b.liquidityUsd / a.liquidityUsd >= 2) {
     L.push(`But ${short(a, picks)} has ${usdShort(a.liquidityUsd)} available and ${short(b, picks)} ${usdShort(b.liquidityUsd)}. Under about ${usdShort(a.liquidityUsd * DEPTH_SHARE)}, ${short(a, picks)}. Above that, ${short(b, picks)}, or you'll move the rate you came for.`);
   } else {
-    const ltv = a.maxLtv != null && b.maxLtv != null && a.maxLtv !== b.maxLtv ? `LTV ${a.maxLtv}% against ${b.maxLtv}%` : null;
+    const ltv = a.maxLtv != null && b.maxLtv != null && a.maxLtv !== b.maxLtv ? `LTV ${ltvS(a.maxLtv)} against ${ltvS(b.maxLtv)}` : null;
     const st = a.stability && b.stability && a.stability !== b.stability ? `${short(a, picks)} ${a.stability}, ${short(b, picks)} ${b.stability} over 30 days` : null;
     const d = `depth ${usdShort(a.liquidityUsd)} against ${usdShort(b.liquidityUsd)}`;
     L.push(`${[ltv, st, d].filter(Boolean).join("; ")}.`);
@@ -164,8 +184,8 @@ function table(pair, offers, link, p) {
   const rows = sorted.map((o) => [tableLabel(o.venue), pct(o.apr), ltvS(o.maxLtv), usdShort(o.liquidityUsd),
     ...(showDepthBar ? [depthBar(o.liquidityUsd, maxLiq)] : []),
     ...(showShare ? [o.liquidityUsd ? pctShare(size / o.liquidityUsd) : "", shareBar(size, o.liquidityUsd)] : []),
-    sparkline(o.sparkline, o.apr), o.stability || "", marketNote(o)]);
-  const lead = sorted[0]; const boldCol = { rate: 1, ltv: 2, liquidity: 3, stability: 3 + (showDepthBar ? 1 : 0) + (showShare ? 2 : 0) + 2 }[rank];
+    o.suspect ? "" : sparkline(o.sparkline, o.apr), o.suspect ? "history unreliable" : o.stability || "", marketNote(o)]);
+  const lead = rank === "stability" ? sorted.find((o) => !o.suspect) || sorted[0] : sorted[0]; const boldCol = { rate: 1, ltv: 2, liquidity: 3, stability: 3 + (showDepthBar ? 1 : 0) + (showShare ? 2 : 0) + 2 }[rank];
   const answer = rank === "ltv" ? `Most borrowing power on ${pair}: ${short(lead, sorted)} at ${ltvS(lead.maxLtv)} LTV, for ${pct(lead.apr)}.`
     : rank === "liquidity" ? `Deepest on ${pair}: ${short(lead, sorted)} with ${usdShort(lead.liquidityUsd)} available, at ${pct(lead.apr)}.`
     : rank === "stability" ? `Steadiest on ${pair} over 30 days: ${short(lead, sorted)}, ${pct(lead.apr)} now, ${pct(Math.min(...lead.sparkline, lead.apr))} to ${pct(Math.max(...lead.sparkline, lead.apr))} in the month.`
@@ -182,7 +202,7 @@ function marketNote(o) { const n = String(o.note || ""); if (/governance/i.test(
 // ---------------- logic ----------------
 function matchVenue(o, v) { const name = o.venue.toLowerCase(); if (v === "aave") return o.protocol === "aave-v3" && !/prime/.test(name); if (v === "prime") return /prime/.test(name); if (v === "morpho") return o.protocol === "morpho-blue"; if (v === "compound") return o.protocol === "compound-v3"; return o.protocol.includes(v) || name.includes(v); }
 function bestPerProtocol(sorted) { const seen = new Set(); return sorted.filter((o) => { const k = o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""); if (seen.has(k)) return false; seen.add(k); return true; }); }
-function sortBy(list, r) { const c = [...list]; if (r === "rate") c.sort((a, b) => a.apr - b.apr); if (r === "ltv") c.sort((a, b) => (b.maxLtv ?? -1) - (a.maxLtv ?? -1)); if (r === "liquidity") c.sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1)); if (r === "stability") c.sort((a, b) => spread(a.sparkline) - spread(b.sparkline)); return c; }
+function sortBy(list, r) { const c = [...list]; if (r === "rate") c.sort((a, b) => a.apr - b.apr); if (r === "ltv") c.sort((a, b) => (b.maxLtv ?? -1) - (a.maxLtv ?? -1)); if (r === "liquidity") c.sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1)); if (r === "stability") c.sort((a, b) => (a.suspect - b.suspect) || (spread(a.sparkline) - spread(b.sparkline))); return c; }
 function spread(s) { return s && s.length > 1 ? Math.max(...s) - Math.min(...s) : 1e9; }
 
 // ---------------- helpers ----------------

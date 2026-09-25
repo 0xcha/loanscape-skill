@@ -12,7 +12,7 @@
       "name": "lotus",
       "source": "./plugins/lotus",
       "description": "Compare live DeFi borrow offers (rate, LTV, liquidity, 30-day stability) for a collateral/borrow pair across Aave, Morpho, Spark, Compound and more, via the Loanscape API.",
-      "version": "0.2.18",
+      "version": "0.2.19",
       "category": "External Integrations",
       "keywords": [
         "defi",

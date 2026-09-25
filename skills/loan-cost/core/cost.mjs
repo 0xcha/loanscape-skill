@@ -95,10 +95,11 @@ function refiCheck() {
   const need = size || DEEP;
   const alts = bestPerProtocol(offers.filter((o) => o !== mine && !(mine && sameVenue(o, mine)) && (o.liquidityUsd || 0) >= need && (ltvArg == null || o.maxLtv == null || o.maxLtv >= ltvArg)).sort((a, b) => a.apr - b.apr));
   const P = [];
-  const here = `on ${pair}${myVenue ? ` at ${name(mine || { venue: myVenue, protocol: myVenue }, offers)}` : ""}`;
+  const plainVenue = myVenue === "morpho" ? "Morpho" : name(mine || { venue: myVenue, protocol: myVenue }, offers); // the user said "Morpho", not which market
+  const here = `on ${pair}${myVenue ? ` at ${plainVenue}` : ""}`;
   const youPay = assumed ? `${name(mine, offers)} charges ${pct(paying)} ${here.replace(/ at .*$/, "")} today, so that's the rate I'm using.`
     : disagree && pooled ? `${name(mine, offers)}'s rate ${here.replace(/ at .*$/, "")} is ${pct(mine.apr)} right now, not the ${pct(quoted)} you quoted; everyone there pays the same rate, so I'm comparing against ${pct(mine.apr)}.`
-    : disagree ? `You quoted ${pct(quoted)} ${here}; the ${name(mine, offers)} market I can see shows ${pct(mine.apr)}, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} that. If you're in a different market there, your rate stands, so I'm comparing against ${pct(quoted)}.`
+    : disagree ? `You quoted ${pct(quoted)} ${here}; the nearest ${plainVenue} market I can see, ${name(mine, offers)}, shows ${pct(mine.apr)}, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} that. If you're in a different market there, your rate stands, so I'm comparing against ${pct(quoted)}.`
     : `You're paying ${pct(paying)} ${here}.`;
   if (!alts.length) { P.push(`${youPay} Nothing else with ${usdShort(need)} available${ltvArg != null ? ` and ${ltvArg}% LTV room` : ""} is on this pair right now.`); return P.join("\n\n"); }
   const best = alts[0]; const gap = bps(paying - best.apr);
@@ -118,10 +119,12 @@ function refiCheck() {
   const link = args.json ? null : pairLinkOnce(mem, chainId, coll, borrow, null); if (link) P.push(link);
   return P.join("\n\n");
 }
-function typicalWeeklySwing(list) { const v = list.filter((o) => !o.suspect && (o.liquidityUsd || 0) >= DEEP && o.sparkline?.length >= 8).map((o) => Math.abs(bps(o.apr - o.sparkline[o.sparkline.length - 7]))).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; }
+// Same baseline as market moves: the 7-days-ago reading is the median of that day and its neighbours, so a one-day blip isn't a week's move.
+function typicalWeeklySwing(list) { const v = list.filter((o) => !o.suspect && (o.liquidityUsd || 0) >= DEEP && o.sparkline?.length >= 8).map((o) => { const s = [...o.sparkline, o.apr]; const i = s.length - 1 - 7; const w = s.slice(Math.max(0, i - 1), i + 2).sort((a, b) => a - b); return Math.abs(bps(o.apr - w[Math.floor(w.length / 2)])); }).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; }
 
 // ---------------- helpers ----------------
-function bestPerProtocol(sorted) { const seen = new Set(); return sorted.filter((o) => { const k = o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""); if (seen.has(k)) return false; seen.add(k); return true; }); }
+// One row per protocol, except Morpho: its markets are separate books, so a deeper Morpho market stays when the cheapest one can't take the size.
+function bestPerProtocol(sorted) { const seen = new Set(); const need = size || DEEP; return sorted.filter((o) => { const k = o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""); if (seen.has(k)) { if (o.protocol === "morpho-blue" && !seen.has(k + ":deep") && (o.liquidityUsd || 0) >= need) { seen.add(k + ":deep"); return true; } return false; } seen.add(k); if ((o.liquidityUsd || 0) >= need) seen.add(k + ":deep"); return true; }); }
 function matchVenue(o, v) { const n = o.venue.toLowerCase(); if (v === "aave") return o.protocol === "aave-v3" && !/prime/.test(n); if (v === "prime") return /prime/.test(n); if (v === "morpho") return o.protocol === "morpho-blue"; if (v === "compound") return o.protocol === "compound-v3"; return o.protocol.includes(v) || n.includes(v); }
 function sameVenue(a, b) { return a.protocol === b.protocol && /prime/i.test(a.venue) === /prime/i.test(b.venue) && (a.protocol !== "morpho-blue" || a.venue === b.venue); }
 function name(o, ctx) { return venueName(o, ctx); }

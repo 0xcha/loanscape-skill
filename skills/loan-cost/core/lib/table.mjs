@@ -3,7 +3,8 @@
 const BLOCKS = "▁▂▃▄▅▆▇█";
 export function sparkline(hist, live) {
   const v = [...(hist || []), ...(live == null ? [] : [live])]; if (v.length < 2) return "";
-  const lo = Math.min(...v), hi = Math.max(...v); const step = Math.max(1, Math.floor(v.length / 8)); const pts = v.filter((_, i) => i % step === 0).slice(-8);
+  const lo = Math.min(...v), hi = Math.max(...v); const step = Math.max(1, Math.floor(v.length / 8));
+  const pts = v.length <= 8 ? v : [...v.slice(0, -1).filter((_, i) => i % step === 0).slice(-7), v[v.length - 1]]; // seven samples, then the live reading
   return "`" + pts.map((x) => BLOCKS[hi === lo ? 0 : Math.min(7, Math.floor(((x - lo) / (hi - lo)) * 7.999))]).join("") + "`";
 }
 // Depth relative to the deepest venue (rank by depth), or the loan's share of each venue's own book (a size was given).

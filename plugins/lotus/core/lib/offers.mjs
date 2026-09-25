@@ -30,6 +30,7 @@ export function cachePath() { const h = memHome(); return h ? join(h, "cache.jso
 export function saveMem(m) { const p = memPath(); if (!p) return false; try { writeFileSync(p, JSON.stringify(m, null, 2)); return true; } catch { return false; } }
 // Returns the link line for this pair if it hasn't been offered recently, and marks it offered in `mem` (caller saves).
 export function pairLinkOnce(mem, chainId, collSym, borrowSym, rank = null) {
+  if (Number(chainId) !== 1) return null; // the app's page shows Ethereum; a link from a Base or Arbitrum read would land on the wrong chain
   const key = `${chainId}:${collSym}/${borrowSym}`; mem.linked ||= {};
   const last = mem.linked[key]; if (last && Date.now() - new Date(last).getTime() < LINK_TTL_MS) return null;
   mem.linked[key] = new Date().toISOString();

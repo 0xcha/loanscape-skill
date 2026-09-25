@@ -31,6 +31,11 @@ The brief has three states and each must read differently: checked and quiet, pa
 - **Quiet return:** a second run on any wallet with nothing moved prints exactly one line ("Since …: no material changes across your one position (about $X a year in interest)."); `--full` prints the rows. A partial read is never quiet: the unread line comes first.
 - **Two wallets:** add `0x761e0f09…d66c7` after `0x34A8B066…49BC`. The combined brief keeps the first wallet's rows first; `--ladder 1` and `--move 1` both name the Morpho cbBTC → USDC loan; the quiet repeat is one line carrying any standing refinance as a clause; the two "worth knowing" lines are the two largest by dollars a year.
 - **Follow-ups are cached:** after a full read, `--ladder`, `--move`, `--full` and `--json` return in well under a second and leave `memory.json` untouched; ten minutes later they read again.
+- **Suspect history:** `market.mjs --coll ETH --borrow USDC --table --rank stability` while Aave Main's history still ends at ~13.9% against a live ~4.4%: the Aave row sits last, no sparkline, "history unreliable" in the label cell, and the answer line names the steadiest trusted venue.
+- **"btc":** `market.mjs --coll BTC --borrow USDC` prints one read headed "cbBTC or WBTC → USDC" with a line naming where WBTC prices differently (or that it doesn't); two reads only when more than one venue differs by 3 bps or more.
+- **One venue:** `--venues aave` alone prints Aave's numbers, never "cheapest by rate".
+- **Seen findings:** a worth-knowing line that was shown once stays marked seen while it persists, even after being cut by the two-slot cap in a later combined brief (memory `findingKeys`).
+- **Links:** none on Base or Arbitrum reads; the app's page has no chain parameter, so a link would land on Ethereum.
 - **Refinance baselines:** `0xdc6c295e…feefb` (Compound WETH → USDC) showed the chain at 3.99% and Loanscape's feed at 5.57% for the same comet on 2026-09-24, with Spark at 4.18% in between. The brief must print no refi line and `--move 1` must say "can't call it today". A refinance is only quoted when the alternative is cheaper than the chain rate; if the two readings differ by more than 25 bps it must be cheaper than both, and the smaller saving is quoted.
 
 ## Known gaps

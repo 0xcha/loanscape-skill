@@ -116,13 +116,14 @@ function renderPair() {
   const deep = ms.filter((m) => m.deep); const up = deep.filter((m) => m.change >= 10).length, down = deep.filter((m) => m.change <= -10).length;
   // Direction by count of deep venues, checked against the depth-weighted move; when they disagree, say both.
   const wsum = deep.reduce((a, m) => a + m.liquidityUsd, 0); const wnet = wsum ? deep.reduce((a, m) => a + m.change * m.liquidityUsd, 0) / wsum : 0;
-  const byCount = !up && !down ? "flat" : up && !down ? "up" : down && !up ? "down" : up > down ? "mostly up" : down > up ? "mostly down" : "mixed";
+  const n = deep.length; const count = (k, w) => (k === n ? w : `${k} of ${n} venues ${w}, the rest flat`);
+  const byCount = !up && !down ? "flat" : up && !down ? count(up, "up") : down && !up ? count(down, "down") : `${up} up, ${down} down of ${n}`;
   const byDepth = wnet >= 10 ? "up" : wnet <= -10 ? "down" : "flat";
-  const agree = byDepth === "flat" ? /flat|mixed/.test(byCount) : byCount.includes(byDepth);
+  const agree = byDepth === "flat" ? /flat|of \d+ venues|up, \d+ down/.test(byCount) : byCount.includes(byDepth);
   const verdict = agree ? byCount : `${byCount} by venue, ${byDepth} where the depth is (${wnet > 0 ? "+" : ""}${Math.round(wnet)} bps weighted)`;
   const L = [`${pair} on ${chainName(chainId)}, last ${days} days: ${verdict}.`, ""];
   const ranked = [...ms].sort((a, b) => (b.deep - a.deep) || (Math.abs(b.change) - Math.abs(a.change))).slice(0, 7);
-  const rows = ranked.map((m) => [name(m, ms), pct(m.apr), Math.abs(m.change) >= 10 ? `${m.change > 0 ? "+" : "−"}${Math.abs(m.change)} bps` : "flat", sparkline(m.sparkline, m.apr), Math.abs(m.streak) >= R.streakDays && Math.abs(m.change) >= 10 ? `${Math.abs(m.streak)} days ${m.streak > 0 ? "up" : "down"}` : "", m.posInRange >= 0.9 ? "high" : m.posInRange <= 0.1 ? "low" : "", Math.abs(m.biggestStep.bps) >= R.stepBps ? `${Math.abs(m.biggestStep.bps)} bps ${m.biggestStep.bps > 0 ? "jump" : "drop"} ${ago(m.biggestStep.daysAgo)}${m.biggestStep.reverted ? ", reverted" : ""}` : "", m.deep ? "" : `thin, ${usdShort(m.liquidityUsd)}`]);
+  const rows = ranked.map((m) => [name(m, ms), pct(m.apr), Math.abs(m.change) >= 10 ? `${m.change > 0 ? "+" : "−"}${Math.abs(m.change)} bps` : "flat", sparkline(m.sparkline, m.apr), Math.abs(m.streak) >= R.streakDays && Math.abs(m.change) >= 10 ? `${Math.abs(m.streak)} days ${m.streak > 0 ? "up" : "down"}` : "", m.apr >= m.hi - 0.005 ? "high" : m.apr <= m.lo + 0.005 ? "low" : m.posInRange >= 0.9 ? "near high" : m.posInRange <= 0.1 ? "near low" : "", Math.abs(m.biggestStep.bps) >= R.stepBps ? `${Math.abs(m.biggestStep.bps)} bps ${m.biggestStep.bps > 0 ? "jump" : "drop"} ${ago(m.biggestStep.daysAgo)}${m.biggestStep.reverted ? ", reverted" : ""}` : "", m.deep ? "" : `thin, ${usdShort(m.liquidityUsd)}`]);
   const H = ["venue", "now", `${days}d`, "30 days", "run", "30d", "step", ""]; const A = ["l", "r", "r", "l", "l", "l", "l", "l"];
   const keep = H.map((_, i) => i < 4 || rows.some((r) => r[i])); const HH = H.filter((_, i) => keep[i]); const AA = A.filter((_, i) => keep[i]); const RR = rows.map((r) => r.filter((_, i) => keep[i]));
   L.push(mdTable(HH, RR, AA, -1));

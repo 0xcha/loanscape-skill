@@ -45,7 +45,7 @@ node "$CORE/brief.mjs" --json
 
 Each position there carries `mine` (the user's own venue as the market sees it) and `best` (the cheapest alternative with enough depth and LTV room).
 
-- "Why is that urgent?", "how far is liquidation?", "what if ETH drops 20%?", "how much can I add or repay?": run the ladder for that row and print it as returned. It never writes memory. The row number is the table's, top to bottom, and it stays the same whether the user asks for the ladder or the moves; "the biggest one" is the row with the largest debt, "the Morpho one" the row whose venue says Morpho. If the question fits more than one row (every loan is BTC-backed and they ask "what if BTC drops 20%?"), run it for each row and print them in order.
+- "Why is that urgent?", "how far is liquidation?", "what if ETH drops 20%?", "how much can I add or repay?": run the ladder for that row and print it as returned. It never writes memory. The row number is the table's, top to bottom, and it stays the same whether the user asks for the ladder or the moves; "the biggest one" is the row with the largest debt, "the Morpho one" the row whose venue says Morpho. If the question fits more than one row (every loan is BTC-backed and they ask "what if BTC drops 20%?"), run it for each row and print them in order, one blank line between them.
 
 ```bash
 node "$CORE/brief.mjs" --ladder <row number> --shock <percent>

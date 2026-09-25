@@ -60,6 +60,7 @@ const pos = { wallet: runs[0].wallet, resolvedFrom: runs[0].label, fetchedAt: ru
 const key = pos.wallet;
 const prev = runs[0].prev;
 const firstRun = runs.every((r) => !r.prev);
+const firstEver = Object.keys(mem.wallets).length === 0; // coverage is said once, on the very first read, not once per wallet
 // A venue that didn't answer this run: its loans from the last good read are carried, never reported as closed.
 const failedVenue = (r, key, entry) => r.status === "failed" || (r.errors || []).some((e) => { const proto = key.split(":")[1]; return e.chainId === entry.chainId && e.protocol === proto && (proto === "morpho-blue" || proto === "fluid" || e.venue === entry.venue); });
 const prevFor = (p) => runs.find((r) => r.wallet === p.walletKey)?.prev;
@@ -107,7 +108,8 @@ for (const p of pos.positions) {
   }
   if (p.mine?.sparkline?.length >= T.risingDays + 1 && !p.mine.suspect) {
     const s = p.mine.sparkline.slice(-(T.risingDays + 1)); const rising = s.every((v, i) => i === 0 || v > s[i - 1]);
-    const what = p.pair?.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} rate on ${venueShort(p)}` : `${name}'s rate`;
+    const pooled = p.protocol !== "morpho-blue";
+    const what = p.pair?.partial ? (pooled ? `${venueShort(p)}'s ${p.pair.debt.symbol} borrow rate` : `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} rate on ${venueShort(p)}`) : `${name}'s rate`;
     if (rising) findings.push({ tier: "worth", key: p.key, kind: "trend", name: what, from: s[0], to: s[s.length - 1], text: `${what} has risen ${T.risingDays} days running, ${pct(s[0])} to ${pct(s[s.length - 1])}.` });
   }
   if (firstRun && p.supplied?.length) {
@@ -136,7 +138,9 @@ const lastRunOf = () => { const ts = runs.map((r) => r.prev?.lastRun).filter(Boo
 const snapshotOf = (r) => Object.fromEntries(r.positions.map((p) => [p.key, { venue: p.venue, chainId: p.chainId, debtUsd: p.debtUsd, collateralUsd: p.collateralUsd, ltv: p.ltv, dropPct: p.liquidationPrice?.direction === "up" ? (p.liquidationPrice.risePct ?? null) : (p.liquidationPrice?.dropPct ?? null), apr: p.borrowApr, collSymbol: p.collateral[0]?.symbol ?? null, collPrice: p.collateral[0]?.priceUsd ?? null, health: p.healthFactor }]));
 if (!args["no-save"] && !args.json && !args.ladder && !args.move && !cache && status !== "failed") {
   for (const r of okRuns) {
-    const keys = [...urgent, ...worth].flatMap((f) => (f.keys || [f.key]).filter((k) => r.positions.some((p) => p.key === k)).map((k) => f.kind + ":" + k));
+    const shown = [...urgent, ...worth].flatMap((f) => (f.keys || [f.key]).filter((k) => r.positions.some((p) => p.key === k)).map((k) => f.kind + ":" + k));
+    const live = new Set(findings.flatMap((f) => (f.keys || [f.key]).map((k) => f.kind + ":" + k)));
+    const keys = [...new Set([...shown, ...(r.prev?.findingKeys || []).filter((k) => live.has(k))])]; // once shown, seen for as long as it persists
     const carried = Object.fromEntries(Object.entries(r.prev?.snapshot || {}).filter(([k, e]) => failedVenue(r, k, e) && !r.positions.some((p) => p.key === k)));
     const carriedKeys = (r.prev?.findingKeys || []).filter((fk) => carried[fk.slice(fk.indexOf(":") + 1)]);
     mem.wallets[r.wallet] = { label: r.label, firstSeen: r.prev?.firstSeen || r.fetchedAt, lastRun: r.fetchedAt, snapshot: { ...carried, ...snapshotOf(r) }, findingKeys: [...keys, ...carriedKeys], runs: (r.prev?.runs || 0) + 1 };
@@ -180,7 +184,7 @@ function render() {
   if (!n) {
     if (status === "partial") { L.push(`No open borrow positions for ${who} in the venues that answered.`); L.push(unread + " Say retry and I'll read them again."); return L.join("\n"); }
     L.push(`No open borrow positions for ${who}.`);
-    L.push(`I read Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}.`);
+    if (firstRun) L.push(`I read Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}.`);
     return L.join("\n");
   }
   const scope = status === "partial" ? " in what I could read" : "";
@@ -220,7 +224,7 @@ function render() {
   if (urgent.some((u) => u.kind === "liq")) detail.push("Want the numbers on adding collateral or paying some down?");
   if (noRates.length) detail.push(`Loanscape's rates didn't load for ${listJoin(noRates)}, so there's no rate or refinance check on ${noRates.length === 1 ? "it" : "them"} this time.`);
   if (detail.length) { L.push(""); L.push(...detail); }
-  if (firstRun) { L.push(""); L.push(`${status === "ok" ? "Checked Aave, Spark, Morpho, Compound and Fluid" : "Checked the other venues"} on ${listJoin(pos.chains.map(chainName))}. ${saved ? "Wallet saved." : "Couldn't save this wallet here, so paste it again next time."}`); if (saved) L.push(`Run /loanscape any morning for what's changed.`); }
+  if (firstRun) { L.push(""); L.push(`${firstEver ? `${status === "ok" ? "Checked Aave, Spark, Morpho, Compound and Fluid" : "Checked the other venues"} on ${listJoin(pos.chains.map(chainName))}. ` : ""}${saved ? "Wallet saved." : "Couldn't save this wallet here, so paste it again next time."}`); if (saved && firstEver) L.push(`Run /loanscape any morning for what's changed.`); }
   return L.join("\n");
 }
 // One markdown table, the venue table's style. Urgent rows carry the venue and health cells in bold.
@@ -346,7 +350,7 @@ function moveLadder(n) {
     const what = p.pair?.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part` : "it";
     const saving = q.range ? `would save at least ${q.bps} bps and ${usd(q.perYear)} a year on ${what} (the chain and Loanscape's feed read your rate ${pct(q.chain)} and ${pct(q.feed)}; the smaller saving is the one quoted)` : `would make ${what} ${usd(q.newCost)} a year instead of ${usd(q.nowCost)}, ${q.bps} bps less`;
     out.push(`4  Refinance: ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} ${saving}; ${usdShort(p.best.liquidityUsd)} available there${share}${fit}. Repay here, reborrow there, two or three transactions with gas on each.`);
-  } else out.push(`4  Refinance: no venue is cheaper on this pair with enough depth for your size today.`);
+  } else out.push(`4  Refinance: no venue is cheaper on ${p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}${p.pair.partial ? ", the largest part of this position," : ""}` : "this pair"} with enough depth for your size today.`);
   // 5 close
   const back = p.collateral.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" + ");
   out.push(`5  Close: repay ${p.debt.map((d) => `${amt(d.amount)} ${d.symbol}`).join(" + ")} and ${back} comes back.`);
@@ -441,7 +445,7 @@ function dedupe(list) { const seen = new Set(); return list.filter((f) => { cons
 // ---------------- helpers ----------------
 function linkSym(s) { return s === "ETH" ? "WETH" : s; }
 function posKey(p) { return `${p.chainId}:${p.protocol}:${p.marketId || p.venue}`; }
-function label(p) { return p.collateral.length === 1 && p.debt.length === 1 ? `the ${venueShort(p)} ${p.collateral[0].symbol} → ${p.debt[0].symbol} loan` : `the ${venueShort(p)} position`; }
+function label(p) { const ch = pos.chains.length > 1 && p.chainId !== 1 ? ` (${chainName(p.chainId)})` : ""; return p.collateral.length === 1 && p.debt.length === 1 ? `the ${venueShort(p)}${ch} ${p.collateral[0].symbol} → ${p.debt[0].symbol} loan` : `the ${venueShort(p)}${ch} position`; }
 function shortName(p) { return venueShort(p).split(" · ")[0]; }
 // "Morpho" when it's the only Morpho loan, "Morpho cbBTC → USDC" when another loan shares the venue.
 function loanName(p) { const v = shortName(p); const dup = pos.positions.some((x) => x !== p && shortName(x) === v); return dup && p.pair ? `${v} ${p.pair.coll.symbol} → ${p.pair.debt.symbol}` : v; }
