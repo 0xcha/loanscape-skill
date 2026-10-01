@@ -43,3 +43,7 @@ The brief has three states and each must read differently: checked and quiet, pa
 - A Morpho position's rate comes from Morpho's API (borrow APY); the trend and refi lines use Loanscape's APR for the same market. They can differ by ~10 bps.
 - Fluid smart-vault shares are not converted to USD.
 - The ladder shocks the largest collateral asset and holds the others; on a position where stablecoins dominate the collateral, the ladder is flat by construction.
+
+## Morning routine (after any change to install-routine.sh)
+
+Never test against your real crontab. Put a fake `crontab` first on `PATH` that keeps its table in a temp file (`-l` prints it or says "no crontab for …" and exits 1; `-` writes stdin to it), and point `HOME` and `LOANSCAPE_HOME` at a temp dir. Seed the table with unrelated jobs, including ones that mention `morning.sh`. Run under `/bin/sh` (dash on Debian and Ubuntu) as well as bash. Then check: an install adds exactly one line ending in `# loanscape-morning-brief` and leaves every other line identical; a second identical install writes nothing; `--remove` gives back the original table exactly; `--dry-run` and `--remove --dry-run` call no `crontab -` and create no files; a backup in `$LOANSCAPE_HOME` matches the table from before each change; a crontab that can't be read is never overwritten. For macOS, a fake `uname` that prints `Darwin`, a no-op `launchctl` and `LAUNCH_AGENTS_DIR` set to a temp dir exercise the launchd path.

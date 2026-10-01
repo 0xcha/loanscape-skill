@@ -70,7 +70,7 @@ Say "run this every morning at 8" in chat. Nobody types a command. Where the bri
 
 - **Claude Desktop app:** Claude creates a scheduled task that runs `/loanscape` daily; the brief appears in the app's scheduled section with a notification. The app has to be open at that hour.
 - **Claude Code with cloud routines:** `/schedule` runs `/loanscape` daily with your machine off, delivered through a connector. Needs the plugin available to the routine and outbound network; unverified from this repo's own tests.
-- **Anywhere else:** Claude installs a local job (`core/install-routine.sh`, launchd on macOS, cron on Linux) that runs the brief script, pops a notification with the first line, and keeps the full text in `~/.loanscape/brief.log`. No LLM, no tokens.
+- **Anywhere else:** Claude installs a local job (`core/install-routine.sh`, launchd on macOS, cron on Linux) that runs the brief script, pops a notification with the first line, and keeps the full text in `~/.loanscape/brief.log`. No LLM, no tokens. On Linux it adds one crontab line tagged `# loanscape-morning-brief` and only ever adds or removes that line; it backs up your crontab to `~/.loanscape/` before any change, running it twice changes nothing, and `--dry-run` (with or without `--remove`) prints the change without making it.
 
 Or just type `/loanscape` in the morning. It takes four seconds and remembers your wallet.
 
