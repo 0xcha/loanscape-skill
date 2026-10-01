@@ -52,7 +52,7 @@ plugins/lotus/
     venues.json                          onchain venue registry, every address called live
     voice.md                             output rules every skill follows
     lib/{rpc,abi,keccak,offers}.mjs      JSON-RPC with fallbacks + curl path, ABI, keccak-256, Loanscape API
-    lib/rules.mjs                        two rules ported from the Loanscape agent: refi dollarization, suspect-endpoint gate
+    lib/rules.mjs                        shared rules: refi dollarization and the suspect-endpoint gate (ported from the Loanscape agent), the 10%-of-depth rule
     morning.sh · install-routine.sh      the daily run: script, log, notification; launchd on macOS, cron on Linux
   skills/
     loanscape/SKILL.md                   intentional (/loanscape). Resolves the wallet, runs the brief, passes it through

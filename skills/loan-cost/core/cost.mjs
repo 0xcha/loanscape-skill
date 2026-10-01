@@ -10,12 +10,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fetchOffers, loadMem, saveMem, pairLinkOnce, venueName } from "./lib/offers.mjs";
-import { bps, fmtPerM, dollarsPerYear, trustedHistory } from "./lib/rules.mjs";
+import { bps, fmtPerM, dollarsPerYear, trustedHistory, fitsDepth } from "./lib/rules.mjs";
 import { mdTable, shareBar } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const T = JSON.parse(readFileSync(join(HERE, "tokens.json"), "utf8"));
-const DEEP = 1e6, DEPTH_SHARE = 0.10;
+const DEEP = 1e6;
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.coll || !args.borrow) die("usage: node cost.mjs --coll <sym> --borrow <sym> [--size 500k] [--ltv 60] [--paying 5.4 | --venue aave [--paying 5.4]] [--chain ethereum|base|arbitrum] [--json]");
@@ -25,6 +25,8 @@ const ltvArg = args.ltv != null ? Number(String(args.ltv).replace("%", "")) : nu
 let paying = args.paying != null ? Number(String(args.paying).replace("%", "")) : null;
 const myVenue = args.venue ? String(args.venue).toLowerCase() : null;
 const venueFilter = args.venues ? String(args.venues).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean) : null;
+// Room for the loan: with a size, the 10%-of-depth rule market.mjs uses (lib/rules.mjs); without one, a $1M floor.
+const roomFor = (o) => (size ? fitsDepth(size, o.liquidityUsd) : (o.liquidityUsd || 0) >= DEEP);
 
 const c = alias(args.coll), b = alias(args.borrow);
 const ca = addr(chainId, c), ba = addr(chainId, b); if (!ca || !ba) die(`I don't have ${!ca ? disp(c) : disp(b)} mapped on ${chainName(chainId)}.`);
@@ -49,8 +51,8 @@ function loanCost() {
   const ltv = ltvArg ?? 50;
   const rows = picks.map((o) => ({ o, net: carry ? collYield + o.rewards - o.apr : o.apr - o.rewards - (collYield ? collYield / (ltv / 100) : 0) }));
   const ordered = carry ? [...rows].sort((a, b) => b.net - a.net) : [...rows].sort((a, b) => a.net - b.net);
-  const best = (size && ordered.find((r) => size <= r.o.liquidityUsd * DEPTH_SHARE)) || ordered[0];
-  const skipped = size ? ordered.filter((r) => r !== best && (carry ? r.net > best.net : r.net < best.net) && size > r.o.liquidityUsd * DEPTH_SHARE) : [];
+  const best = (size && ordered.find((r) => fitsDepth(size, r.o.liquidityUsd))) || ordered[0];
+  const skipped = size ? ordered.filter((r) => r !== best && (carry ? r.net > best.net : r.net < best.net) && !fitsDepth(size, r.o.liquidityUsd)) : [];
   const L = [];
   if (carry) {
     L.push(`${coll} yields ${pct(collYield)}; ${venueFilter ? name(best.o, offers) : `the cheapest deep venue, ${name(best.o, offers)},`} charges ${pct(best.o.apr)} to borrow ${borrow} against it. Carry ${signed(bps(best.net))} bps per unit borrowed${size ? "" : `, ${fmtPerM(Math.abs(bps(best.net)))}${best.net < 0 ? " against you" : ""}`}.`);
@@ -93,7 +95,13 @@ function refiCheck() {
   const drift = mine && !assumed ? bps(mine.apr - paying) : 0; const disagree = Math.abs(drift) > AGREE_BPS;
   const quoted = paying; if (disagree && pooled) paying = mine.apr;
   const need = size || DEEP;
-  const alts = bestPerProtocol(offers.filter((o) => o !== mine && !(mine && sameVenue(o, mine)) && (o.liquidityUsd || 0) >= need && (ltvArg == null || o.maxLtv == null || o.maxLtv >= ltvArg)).sort((a, b) => a.apr - b.apr));
+  const others = offers.filter((o) => o !== mine && !(mine && sameVenue(o, mine)) && (ltvArg == null || o.maxLtv == null || o.maxLtv >= ltvArg)).sort((a, b) => a.apr - b.apr);
+  const alts = bestPerProtocol(others.filter(roomFor));
+  // Cheaper than you and than any venue with room, but the loan would be over a tenth of its depth: named as too thin, never offered.
+  // One that could at least fund the loan is named first; else the cheapest, with what it has.
+  const thins = size ? others.filter((o) => !roomFor(o) && o.liquidityUsd && o.apr < paying && (!alts[0] || o.apr < alts[0].apr)) : [];
+  const thin = thins.find((o) => size <= o.liquidityUsd) || thins[0];
+  const thinLine = thin ? `${name(thin, offers)} charges ${pct(thin.apr)}, ${bps(paying - thin.apr)} bps less than you pay, but ${size <= thin.liquidityUsd ? `${usdShort(size)} would be ${pctShare(size / thin.liquidityUsd)} of its ${usdShort(thin.liquidityUsd)} available, so expect to move the rate` : `it only has ${usdShort(thin.liquidityUsd)} available`}.` : null;
   const P = [];
   const plainVenue = myVenue === "morpho" ? "Morpho" : name(mine || { venue: myVenue, protocol: myVenue }, offers); // the user said "Morpho", not which market
   const here = `on ${pair}${myVenue ? ` at ${plainVenue}` : ""}`;
@@ -101,7 +109,7 @@ function refiCheck() {
     : disagree && pooled ? `${name(mine, offers)}'s rate ${here.replace(/ at .*$/, "")} is ${pct(mine.apr)} right now, not the ${pct(quoted)} you quoted; everyone there pays the same rate, so I'm comparing against ${pct(mine.apr)}.`
     : disagree ? `You quoted ${pct(quoted)} ${here}; the nearest ${plainVenue} market I can see, ${name(mine, offers)}, shows ${pct(mine.apr)}, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} that. If you're in a different market there, your rate stands, so I'm comparing against ${pct(quoted)}.`
     : `You're paying ${pct(paying)} ${here}.`;
-  if (!alts.length) { P.push(`${youPay} Nothing else with ${usdShort(need)} available${ltvArg != null ? ` and ${ltvArg}% LTV room` : ""} is on this pair right now.`); return P.join("\n\n"); }
+  if (!alts.length) { P.push(size ? `${youPay} Keeping a loan under a tenth of what's available, nothing else on this pair can take ${usdShort(size)}${ltvArg != null ? ` with ${ltvArg}% LTV room` : ""} right now.` : `${youPay} Nothing else with ${usdShort(need)} available${ltvArg != null ? ` and ${ltvArg}% LTV room` : ""} is on this pair right now.`); if (thinLine) P.push(thinLine); return P.join("\n\n"); }
   const best = alts[0]; const gap = bps(paying - best.apr);
   const swing = typicalWeeklySwing(offers);
   if (gap <= 0) {
@@ -111,6 +119,7 @@ function refiCheck() {
     const depth = `${name(best, offers)} has ${usdShort(best.liquidityUsd)} available${size ? `, so you'd be ${pctShare(size / best.liquidityUsd)} of it` : ""}${best.maxLtv != null ? `, and its max LTV is ${ltvS(best.maxLtv)}` : ""}.`;
     const ctx = swing != null ? (gap >= swing * 2 ? `The gap is ${(gap / swing).toFixed(1)}x this pair's typical weekly swing of ${swing} bps, so it isn't noise.` : gap >= swing ? `The gap is about this pair's typical weekly swing of ${swing} bps; it could close on its own.` : `The gap is inside this pair's typical weekly swing of ${swing} bps; it may close before a move pays for itself.`) : null;
     P.push([depth, ctx].filter(Boolean).join(" "));
+    if (thinLine) P.push(thinLine);
     const next = alts[1] && bps(paying - alts[1].apr) > 0 ? `Next best is ${name(alts[1], offers)} at ${pct(alts[1].apr)} with ${usdShort(alts[1].liquidityUsd)} available.` : null;
     P.push([next, "Moving means repaying here and reborrowing there, two or three transactions with gas on each, and a new liquidation price at the new venue."].filter(Boolean).join(" "));
   }
@@ -124,7 +133,7 @@ function typicalWeeklySwing(list) { const v = list.filter((o) => !o.suspect && (
 
 // ---------------- helpers ----------------
 // One row per protocol, except Morpho: its markets are separate books, so a deeper Morpho market stays when the cheapest one can't take the size.
-function bestPerProtocol(sorted) { const seen = new Set(); const need = size || DEEP; return sorted.filter((o) => { const k = o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""); if (seen.has(k)) { if (o.protocol === "morpho-blue" && !seen.has(k + ":deep") && (o.liquidityUsd || 0) >= need) { seen.add(k + ":deep"); return true; } return false; } seen.add(k); if ((o.liquidityUsd || 0) >= need) seen.add(k + ":deep"); return true; }); }
+function bestPerProtocol(sorted) { const seen = new Set(); return sorted.filter((o) => { const k = o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""); if (seen.has(k)) { if (o.protocol === "morpho-blue" && !seen.has(k + ":deep") && roomFor(o)) { seen.add(k + ":deep"); return true; } return false; } seen.add(k); if (roomFor(o)) seen.add(k + ":deep"); return true; }); }
 function matchVenue(o, v) { const n = o.venue.toLowerCase(); if (v === "aave") return o.protocol === "aave-v3" && !/prime/.test(n); if (v === "prime") return /prime/.test(n); if (v === "morpho") return o.protocol === "morpho-blue"; if (v === "compound") return o.protocol === "compound-v3"; return o.protocol.includes(v) || n.includes(v); }
 function sameVenue(a, b) { return a.protocol === b.protocol && /prime/i.test(a.venue) === /prime/i.test(b.venue) && (a.protocol !== "morpho-blue" || a.venue === b.venue); }
 function name(o, ctx) { return venueName(o, ctx); }
