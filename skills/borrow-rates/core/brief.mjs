@@ -18,26 +18,28 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fetchOffers, deepLink, loadMem, saveMem, memPath, cachePath, venueName, pairLinkOnce } from "./lib/offers.mjs";
-import { trustedHistory, fitsDepth } from "./lib/rules.mjs";
+import { trustedHistory, fitsDepth, REFI_MIN_BPS, REFI_MIN_USD_YR } from "./lib/rules.mjs";
 import { mdTable } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MEM = memPath();
 let saved = false;
 const CACHE_MS = 10 * 60 * 1000;
-const T = { urgentDropPct: 15, urgentHealth: 1.15, urgentRateStepBps: 100, refiMinBps: 20, refiMinUsdPerYear: 100, risingDays: 3, diffPricePct: 2, diffHeadroomPts: 2, diffRateBps: 10, diffDebtPct: 1, idleMinUsd: 50, moveTargetPct: 30, urgentLstPct: 3, urgentStablePct: 0.75, rateAgreeBps: 25 };
+const T = { urgentDropPct: 15, urgentHealth: 1.15, urgentRateStepBps: 100, refiMinBps: REFI_MIN_BPS, refiMinUsdPerYear: REFI_MIN_USD_YR, risingDays: 3, diffPricePct: 2, diffHeadroomPts: 2, diffRateBps: 10, diffDebtPct: 1, idleMinUsd: 50, moveTargetPct: 30, urgentLstPct: 3, urgentStablePct: 0.75, rateAgreeBps: 25 };
 
 const args = parseArgs(process.argv.slice(2));
 const mem = loadMem();
+// A follow-up (--json, --ladder, --move, --full) with no --wallet is about the brief the user just saw: it reuses that read while
+// fresh, over the same wallets in the same order, so a row number means what it meant on screen even when the last brief was for
+// a wallet that isn't the remembered one.
+const followUp = !args.wallet && !!(args.json || args.ladder || args.move || args.full);
+const cache = followUp ? loadCache() : null;
 // One wallet when given; otherwise every remembered wallet, one brief.
 // Remembered wallets read in the order they were added, so adding a second one never renumbers the first one's rows.
-const walletArgs = args.wallet ? [args.wallet] : Object.keys(mem.wallets).sort((a, b) => String(mem.wallets[a].firstSeen || "").localeCompare(String(mem.wallets[b].firstSeen || "")));
+const walletArgs = args.wallet ? [args.wallet] : cache ? cache.runs.map((r) => r.wallet) : Object.keys(mem.wallets).sort((a, b) => String(mem.wallets[a].firstSeen || "").localeCompare(String(mem.wallets[b].firstSeen || "")));
 if (!walletArgs.length) { console.log(args.json ? JSON.stringify({ needWallet: true }) : "NEED_WALLET"); process.exit(0); }
-// Rows are numbered as the brief printed them, whatever flag follows: ladder and move both read every remembered wallet.
 
-// 1. positions, per wallet, merged. A follow-up (--json, --ladder, --move, --full) with no --wallet reuses the last full read when fresh.
-const followUp = !args.wallet && !!(args.json || args.ladder || args.move || args.full);
-const cache = followUp ? loadCache(walletArgs) : null;
+// 1. positions, per wallet, merged.
 const runs = [];
 if (cache) { for (const r of cache.runs) { r.prev = mem.wallets[r.wallet] || null; runs.push(r); } }
 else for (const w of walletArgs) {
@@ -86,12 +88,13 @@ for (const p of pos.positions) {
   const name = label(p);
   const L = p.liquidationPrice;
   const dist = L?.direction === "up" ? L.risePct : L?.dropPct;
-  p.tier = riskTier(p);
+  p.loopFamily = loopFamily(p); p.tier = riskTier(p);
   const limit = p.tier === "stable" ? T.urgentStablePct : p.tier === "lst" ? T.urgentLstPct : T.urgentDropPct;
   const healthUrgent = p.tier === "volatile" && p.healthFactor != null && p.healthFactor < T.urgentHealth; // stable loops run at 1.01–1.03 by design
   if ((dist != null && dist <= limit) || healthUrgent) {
     const verb = p.tier === "stable" ? "depegs" : "drops";
-    const txt = isLoop(p) && dist != null ? `${name} liquidates if the ${ratioName(p)} ratio falls ${pc1(dist)}.`
+    const txt = isLoop(p) && dist != null ? (dist > 0 ? `${name} liquidates if the ${ratioName(p)} ratio falls ${pc1(dist)}.` : `${name} is at or past its liquidation level on the ${ratioName(p)} ratio.`)
+      : dist != null && dist <= 0 ? `${name} is at or past its liquidation price now.`
       : L?.direction === "up" && dist != null ? `${name} liquidates if ${L.symbol} rises ${dist.toFixed(0)}%, to ${usd(L.price)}.`
       : dist != null ? `${name} liquidates if ${L.symbol} ${verb} ${dist.toFixed(0)}%, to ${usd(L.price)}.` : `${name} is close to liquidation.`;
     findings.push({ tier: "urgent", kind: "liq", key: p.key, inRow: !!L?.price, text: `${txt} Health ${fmtHf(p.healthFactor)}.` });
@@ -223,8 +226,8 @@ function render() {
   if (newWorth.length === 1) detail.push(`One thing worth knowing: ${newWorth[0].text}`);
   else newWorth.forEach((w) => detail.push(`Worth knowing: ${w.text}`));
   for (const w of newWorth) if (w.kind === "refi" && w.linkLine) detail.push(w.linkLine);
-  const liqs = urgent.filter((u) => u.kind === "liq");
-  if (liqs.length) detail.push(liqs.every((u) => isLoop(pos.positions.find((p) => p.key === u.key))) ? "Want the numbers on levering down?" : "Want the numbers on adding collateral or paying some down?");
+  const liqs = urgent.filter((u) => u.kind === "liq"); const loops = liqs.filter((u) => isLoop(pos.positions.find((p) => p.key === u.key)));
+  if (liqs.length) detail.push(loops.length === liqs.length ? "Want the numbers on levering down?" : loops.length ? "Want the numbers on adding collateral, paying some down, or levering down?" : "Want the numbers on adding collateral or paying some down?");
   if (noRates.length) detail.push(`Loanscape's rates didn't load for ${listJoin(noRates)}, so there's no rate or refinance check on ${noRates.length === 1 ? "it" : "them"} this time.`);
   if (detail.length) { L.push(""); L.push(...detail); }
   if (firstRun) { L.push(""); L.push(`${firstEver ? `${status === "ok" ? "Checked Aave, Spark, Morpho, Compound and Fluid" : "Checked the other venues"} on ${listJoin(pos.chains.map(chainName))}. ` : ""}${saved ? "Wallet saved." : "Couldn't save this wallet here, so paste it again next time."}`); if (saved && firstEver) L.push(`Run /loanscape any morning for what's changed.`); }
@@ -237,7 +240,9 @@ function table(urgentKeys) {
     const side = (list, total) => list.length <= 1 ? list.map((c) => `${amt(c.amount)} ${c.symbol}`).join("") || "none" : `${list.map((c) => c.symbol).join(" + ")} (${usd(total)})`;
     const L = p.liquidationPrice;
     const pc = (x) => (x < 1 ? x.toFixed(1) : x.toFixed(0)) + "%";
-    const liq = isLoop(p) && L?.price ? `${ratioName(p)} −${pc1(L.dropPct)}`
+    const dist = L?.direction === "up" ? L.risePct : L?.dropPct;
+    const liq = L?.price && dist != null && dist <= 0 ? "past liquidation"
+      : isLoop(p) && L?.price ? `${ratioName(p)} −${pc1(L.dropPct)}`
       : L?.price && L.direction === "up" ? `${L.symbol} up to ${usd(L.price)} (+${pc(L.risePct)})`
       : L?.price ? `${usd(L.price)} ${L.symbol} (−${pc(L.dropPct)})`
       : L?.note && /other collateral/.test(L.note) ? "covered by other collateral"
@@ -255,6 +260,7 @@ function table(urgentKeys) {
 // When the API gives no kind (un-curated assets), the collateral counts as stable if the debt is near $1 and the collateral symbol
 // contains "USD": yield-bearing stables (syrupUSDC $1.18, sUSDe $1.25) price well above $1, so a near-$1 test on both sides misses them.
 function riskTier(p) {
+  if (p.loopFamily === "usd") return "stable"; if (p.loopFamily) return "lst"; // same-family pairs, whatever the API calls the tokens
   const ck = p.market?.coll?.kind || null, dk = p.market?.borrow?.kind || null;
   const nearOne = (x) => x?.priceUsd != null && Math.abs(x.priceUsd - 1) < 0.05;
   const debtStable = dk === "stable" || (!dk && p.debt.every(nearOne));
@@ -297,7 +303,7 @@ function ladder(n) {
   }
   out.push(`${shock ? "Now" : cap(label(p))}: LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. ${venueShort(p)} liquidates at ${ltPct}% LTV.`);
   for (const k of [0.1, 0.2, 0.3]) { const r = at(up ? k : -k); out.push(`  ${sym} ${up ? "+" : "−"}${(k * 100).toFixed(0)}%   LTV ${(r.ltv * 100).toFixed(0)}%   health ${fmtHf(r.health)}${r.health < 1 ? "   liquidated" : ""}`); }
-  if (L?.price) out.push(up ? `  liquidates if ${L.symbol} rises to ${usd(L.price)} (+${L.risePct.toFixed(0)}%).` : `  liquidates at ${usd(L.price)} ${L.symbol} (−${L.dropPct.toFixed(0)}%)${L.note ? `, ${L.note}` : ""}.`);
+  if (L?.price) out.push(up ? `  liquidates if ${L.symbol} rises to ${usd(L.price)} (+${L.risePct.toFixed(0)}%).` : L.dropPct > 0 ? `  liquidates at ${usd(L.price)} ${L.symbol} (−${L.dropPct.toFixed(0)}%)${L.note ? `, ${L.note}` : ""}.` : `  the liquidation price, ${usd(L.price)} ${L.symbol}, is at or above today's ${usd(L.currentPrice)}: it can be liquidated now.`);
   else if (L?.note) out.push(`  ${L.note}.`);
   const ceil = p.mine?.recLtv != null ? p.mine.recLtv / 100 : p.mine?.maxLtv != null ? p.mine.maxLtv / 100 : null;
   if (ceil) {
@@ -322,7 +328,7 @@ function moveLadder(n) {
   const main = p.collateral.filter((c) => c.usd != null).sort((a, b) => b.usd - a.usd)[0]; const debtMain = p.debt.filter((d) => d.usd != null).sort((a, b) => b.usd - a.usd)[0];
   const out = [`Should you move ${label(p)}? The moves, from leaving it alone to closing it.`];
   // 1 do nothing
-  const stand = [yearly != null ? `${usd(yearly)} a year` : null, dist != null ? `liquidation ${up ? "a " + dist.toFixed(0) + "% rise" : "a " + dist.toFixed(0) + "% drop"} away` : p.healthFactor != null ? `health ${fmtHf(p.healthFactor)}` : null, ceil != null ? (p.ltv <= ceil ? `under the ${(ceil * 100).toFixed(0)}% working ceiling` : `over the ${(ceil * 100).toFixed(0)}% working ceiling`) : null].filter(Boolean);
+  const stand = [yearly != null ? `${usd(yearly)} a year` : null, dist != null ? (dist <= 0 ? "at or past liquidation now" : `liquidation ${up ? "a " + dist.toFixed(0) + "% rise" : "a " + dist.toFixed(0) + "% drop"} away`) : p.healthFactor != null ? `health ${fmtHf(p.healthFactor)}` : null, ceil != null ? (p.ltv <= ceil ? `under the ${(ceil * 100).toFixed(0)}% working ceiling` : `over the ${(ceil * 100).toFixed(0)}% working ceiling`) : null].filter(Boolean);
   out.push(`1  Do nothing: ${stand.join(", ")}.`);
   // 2 add collateral / 3 repay some, to the same target
   const overCeil = ceil != null && p.ltv > ceil;
@@ -369,25 +375,43 @@ function refiStep(p) {
 }
 
 // ---------------- loops ----------------
-// A loop is liquid-staking collateral against the asset it stakes (wstETH → WETH). ETH's price moves both sides together, so a USD
-// drop says nothing about it: what liquidates it is the ratio between the two (a depeg, or the oracle's exchange rate), and what it
-// earns is the carry, the staking yield on the collateral against the borrow rate. Adding collateral is not the lever: unwinding is
-// (withdraw some collateral, swap it, repay). The working ceiling Loanscape gives the pair is a generic one, so loops are not held to it.
-function isLoop(p) { return p?.tier === "lst" && p.liquidationPrice?.direction !== "up"; }
-function ratioName(p) { const d = p.debt.filter((x) => x.usd != null).sort((a, b) => b.usd - a.usd)[0]; return `${p.liquidationPrice?.symbol || p.collateral[0]?.symbol}/${d?.symbol || "ETH"}`; }
+// A loop is collateral and debt in one asset family: liquid-staking ETH against WETH, LBTC against WBTC, a yield-bearing dollar
+// against a stablecoin. The family's price moves both sides together, so a USD drop says nothing about it: what liquidates it is
+// the ratio between the two (a depeg, or the oracle's exchange rate), and what it earns is the carry, the collateral's own yield
+// against the borrow rate. Adding collateral is not the lever: deleveraging is. The working ceiling Loanscape gives the pair is a
+// generic one, so loops are not held to it. A position with anything outside the family (a USDC debt beside the WETH one) is not
+// a loop; the family's price does move that one.
+function FAMILY(sym) { return /BTC/i.test(sym) ? "btc" : /ETH/i.test(sym) ? "eth" : /USD|DAI/i.test(sym) ? "usd" : null; } // hoisted: called from the top-level findings loop above
+function BASE(f) { return { eth: "ETH", btc: "BTC", usd: "dollar" }[f]; }
+function loopFamily(p) {
+  if (!p.collateral.length || !p.debt.length) return null;
+  const syms = [...p.collateral, ...p.debt].map((x) => x.symbol || ""); const f = FAMILY(syms[0]);
+  if (!f || !syms.every((x) => FAMILY(x) === f)) return null;
+  const kf = (k) => ({ lst: "eth", eth: "eth", btc: "btc", stable: "usd" })[k] || null; // the API's kind, when it has one, must agree
+  const ck = kf(p.market?.coll?.kind), dk = kf(p.market?.borrow?.kind);
+  return (ck && ck !== f) || (dk && dk !== f) ? null : f;
+}
+function isLoop(p) { return !!p?.loopFamily && p.liquidationPrice?.price != null && p.liquidationPrice.direction !== "up"; }
+function ratioName(p) { const d = p.debt.filter((x) => x.usd != null).sort((a, b) => b.usd - a.usd)[0]; return `${p.liquidationPrice?.symbol || p.collateral[0]?.symbol}/${d?.symbol || "?"}`; }
 function pc1(x) { return (x < 10 ? x.toFixed(1) : x.toFixed(0)) + "%"; }
-// The yield is the collateral's own (the API's, for the pair's collateral); on a position holding more than the pair it covers that part.
+function lc(t) { return t.charAt(0).toLowerCase() + t.slice(1); }
+// "a 4.9% fall in the wstETH/WETH ratio", or the plain truth when the ratio is already past the line
+function roomTxt(p) { const d = p.liquidationPrice.dropPct; return d > 0 ? `a ${pc1(d)} fall in the ${ratioName(p)} ratio` : `the ${ratioName(p)} ratio already at or past its liquidation level`; }
+function sameMove(p) { const f = p.loopFamily; return f === "usd" ? "Both sides are dollar assets, so only a depeg between them moves it." : `${/^[AEIOU]/.test(BASE(f)) ? "An" : "A"} ${BASE(f)} price move shifts both sides together and doesn't touch it.`; }
+// The carry needs the collateral's own yield. The API sends 0 when it has none for a token, which is not "earns nothing": then the
+// carry is left unpriced and said so, never shown as a loss.
 function loopCarry(p) {
-  const y = p.market?.coll?.yieldApr; const apr = rateBase(p).chain;
-  if (y == null || apr == null || !p.pair) return null;
-  const collUsd = p.pair.coll.usd, debtUsd = p.pair.partial ? p.pair.debt.usd : p.debtUsd;
-  return { y: Number(y), apr, net: (collUsd * y - debtUsd * apr) / 100, spreadBps: Math.round((y - apr) * 100), part: p.pair.partial };
+  const y = Number(p.market?.coll?.yieldApr); const apr = rateBase(p).chain;
+  if (!(y > 0) || apr == null || !p.pair) return null;
+  const collUsd = p.pair.coll.usd; const debtUsd = (p.pair.partial ? p.pair.debt.usd : p.debtUsd) * (p.collateralUsd ? collUsd / p.collateralUsd : 1); // the pair's share of the debt on a mixed position
+  return { y, apr, net: (collUsd * y - debtUsd * apr) / 100, spreadBps: Math.round((y - apr) * 100), part: p.pair.partial };
 }
 function carryText(p, c) {
   const what = c.part ? ` on the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part` : "";
   return `${p.pair.coll.symbol} earns ${pct(c.y)} against ${pct(c.apr)} to borrow, about ${usd(Math.abs(c.net))} a year ${c.net >= 0 ? "net" : "net against you"}${what}`;
 }
-// Unwind to a target ratio room: sell R (USD) of the main collateral and repay R of debt. Liquidation when Σ coll × LT = debt, with the
+function noCarry(p, mid) { const t = `no yield figure for ${p.pair?.coll.symbol || p.collateral[0]?.symbol} from Loanscape, so the carry isn't priced`; return mid ? `carry unpriced: ${t}` : `${cap(t)}.`; }
+// Deleverage to a target ratio room: repay R (USD) of debt out of R of the main collateral. Liquidation when Σ coll × LT = debt, with the
 // main collateral's ratio down by `room`: D − R = others + (M − R)(1 − room)LT → R = (D − others − M(1 − room)LT) / (1 − (1 − room)LT).
 function unwindFor(p, room) {
   const lt = (c) => c.liquidationThreshold ?? p.liquidationThreshold;
@@ -396,34 +420,38 @@ function unwindFor(p, room) {
   const k = (1 - room) * lt(main); const R = (p.debtUsd - others - main.usd * k) / (1 - k);
   return R > 0 && R < p.debtUsd && R < main.usd ? R : null;
 }
+// The venue won't release collateral first at this health, so the unwind is one step: repay-with-collateral where the venue has it,
+// else a flash-loan deleverage. The target is twice today's room (capped at 50%), or 5% when there is no room left.
 function leverDownText(p, c) {
-  const d = p.liquidationPrice.dropPct / 100; const room = Math.min(2 * d, 0.5); const R = unwindFor(p, room);
-  const debtMain = p.debt.filter((x) => x.usd != null).sort((a, b) => b.usd - a.usd)[0];
-  if (R == null) return `Lever down: unwind some (withdraw ${p.liquidationPrice.symbol}, swap, repay ${debtMain?.symbol || "the debt"}); each unit repaid widens the ratio room.`;
-  const repay = debtMain?.priceUsd ? `${amt(R / debtMain.priceUsd)} ${debtMain.symbol}` : "the debt";
+  const L = p.liquidationPrice; const d = Math.max(L.dropPct, 0) / 100; const room = d >= 0.01 ? Math.min(2 * d, 0.5) : 0.05; // under a point of room, "double it" is nothing: aim for 5% const R = unwindFor(p, room);
+  const debtMain = p.debt.filter((x) => x.usd != null).sort((a, b) => b.usd - a.usd)[0]; const main = p.collateral.filter((x) => x.usd != null).sort((a, b) => b.usd - a.usd)[0];
+  const how = "in one step, repay-with-collateral or a flash-loan deleverage; at this health the venue won't let you withdraw first";
+  if (R == null) return `Lever down: deleverage (repay ${debtMain?.symbol || "the debt"} out of ${L.symbol}, ${how}); every unit repaid widens the ratio room.`;
+  const repay = debtMain?.priceUsd ? `${amt(R / debtMain.priceUsd)} ${debtMain.symbol}` : usd(R); const sell = main?.priceUsd ? `${amt(R / main.priceUsd)} ${main.symbol}` : `${usd(R)} of ${L.symbol}`;
   const cost = c ? (c.spreadBps > 0 ? `, and gives up about ${usd((R * c.spreadBps) / 10000)} a year of carry` : c.spreadBps < 0 ? `, and saves about ${usd((R * -c.spreadBps) / 10000)} a year, since the carry runs negative at today's rates` : "") : "";
-  return `Lever down: unwinding ${usd(R)} (withdraw that much ${p.liquidationPrice.symbol}, swap it, repay ${repay}) ${room === 2 * d ? "doubles the ratio room" : "widens the ratio room"} to ${pc1(room * 100)}${cost}.`;
+  return `Lever down: repaying ${repay} (${usd(R)}) out of ${sell} (${how}) ${room === 2 * d ? `doubles the ratio room to ${pc1(room * 100)}` : `puts the ratio room at ${pc1(room * 100)}`}${cost}.`;
 }
 function loopLadder(p) {
-  const L = p.liquidationPrice; const ratio = ratioName(p); const lt = (c) => c.liquidationThreshold ?? p.liquidationThreshold;
+  const L = p.liquidationPrice; const ratio = ratioName(p); const lt = (c) => c.liquidationThreshold ?? p.liquidationThreshold; const base = BASE(p.loopFamily);
   const colls = p.collateral.filter((c) => c.usd != null); const main = colls.reduce((a, b) => (b.usd > a.usd ? b : a)); const others = colls.filter((c) => c !== main);
   const at = (s) => { const coll = main.usd * (1 - s) + others.reduce((t, c) => t + c.usd, 0); const cover = main.usd * (1 - s) * lt(main) + others.reduce((t, c) => t + c.usd * lt(c), 0); return { ltv: p.debtUsd / coll, health: cover / p.debtUsd }; };
   const out = [];
   const shock = args.shock != null ? Math.abs(Number(args.shock)) / 100 : null;
   if (shock) {
-    const r = at(shock);
-    out.push(`A ${(shock * 100).toFixed(0)}% ETH move shifts ${main.symbol} and ${ratio.split("/")[1]} together, so ${label(p)} stays at LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. The ratio is what liquidates it: ${ratio} −${(shock * 100).toFixed(0)}% ${r.health < 1 ? `would liquidate it (liquidation comes at −${pc1(L.dropPct)})` : `leaves it at LTV ${(r.ltv * 100).toFixed(0)}%, health ${fmtHf(r.health)}`}.`);
+    const r = at(shock); const n = (shock * 100).toFixed(0); const debtSym = ratio.split("/")[1];
+    const same = p.loopFamily === "usd" ? `A ${n}% move in the dollar price of ${main.symbol} and ${debtSym} moves them together` : `A ${n}% ${base} move shifts ${main.symbol} and ${debtSym} together`;
+    out.push(`${same}, so ${label(p)} stays at LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. The ratio is what liquidates it: ${ratio} −${n}% ${r.health < 1 ? `would liquidate it (${L.dropPct > 0 ? `liquidation comes at −${pc1(L.dropPct)}` : "it is already at or past the line"})` : `leaves it at LTV ${(r.ltv * 100).toFixed(0)}%, health ${fmtHf(r.health)}`}.`);
   }
-  out.push(`${shock ? "Now" : cap(label(p))}: LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. ${venueShort(p)} liquidates at ${(p.liquidationThreshold * 100).toFixed(0)}% LTV, a ${pc1(L.dropPct)} fall in the ${ratio} ratio${L.note && /other collateral/.test(L.note) ? " (other collateral held where it is)" : ""}. An ETH price move alone doesn't touch it.`);
+  out.push(`${shock ? "Now" : cap(label(p))}: LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. ${venueShort(p)} liquidates at ${(p.liquidationThreshold * 100).toFixed(0)}% LTV, ${roomTxt(p)}${L.note && /other collateral/.test(L.note) ? " (other collateral held where it is)" : ""}. ${sameMove(p)}`);
   for (const k of [0.01, 0.02, 0.03]) { const r = at(k); out.push(`  ${ratio} −${(k * 100).toFixed(0)}%   LTV ${(r.ltv * 100).toFixed(0)}%   health ${fmtHf(r.health)}${r.health < 1 ? "   liquidated" : ""}`); }
-  const c = loopCarry(p); if (c) out.push(`Carry: ${carryText(p, c)}.`);
+  const c = loopCarry(p); out.push(c ? `Carry: ${carryText(p, c)}.` : noCarry(p));
   out.push(leverDownText(p, c));
   return out.join("\n");
 }
 function loopMoves(p) {
   const L = p.liquidationPrice; const yearly = p.borrowApr != null ? (p.debtUsd * p.borrowApr) / 100 : null; const c = loopCarry(p);
   const out = [`Should you move ${label(p)}? The moves, from leaving it alone to closing it.`];
-  const stand = [yearly != null ? `${usd(yearly)} a year in interest` : null, c ? `carry: ${carryText(p, c)}` : null, `liquidation if the ${ratioName(p)} ratio falls ${pc1(L.dropPct)}; an ETH price move alone doesn't touch it`].filter(Boolean);
+  const stand = [yearly != null ? `${usd(yearly)} a year in interest` : null, c ? `carry: ${carryText(p, c)}` : noCarry(p, true), `liquidation ${L.dropPct > 0 ? `if the ${ratioName(p)} ratio falls ${pc1(L.dropPct)}` : `possible now, the ${ratioName(p)} ratio is at or past its level`}; ${lc(sameMove(p)).replace(/\.$/, "")}`].filter(Boolean);
   out.push(`1  Do nothing: ${stand.join("; ")}.`);
   out.push(`2  ${leverDownText(p, c)}`);
   out.push(refiStep(p).replace(/^4 /, "3 "));
@@ -487,10 +515,13 @@ function computeDiff(prev, pos, unread = () => false) {
   for (const p of pos.positions) {
     const b = before[p.key]; seen.add(p.key);
     if (!b) { lines.push(`New: ${label(p)}.`); continue; }
-    const name = shortName(p);
-    if (b.collPrice && p.collateral[0]?.priceUsd) { const ch = (p.collateral[0].priceUsd / b.collPrice - 1) * 100; if (Math.abs(ch) >= T.diffPricePct) lines.push(`${p.collateral[0].symbol} ${ch > 0 ? "+" : "−"}${Math.abs(ch).toFixed(0)}%.`); }
+    const name = shortName(p); const loop = isLoop(p);
+    if (!loop && b.collPrice && p.collateral[0]?.priceUsd) { const ch = (p.collateral[0].priceUsd / b.collPrice - 1) * 100; if (Math.abs(ch) >= T.diffPricePct) lines.push(`${p.collateral[0].symbol} ${ch > 0 ? "+" : "−"}${Math.abs(ch).toFixed(0)}%.`); }
     const nowDist = p.liquidationPrice?.direction === "up" ? p.liquidationPrice.risePct : p.liquidationPrice?.dropPct;
-    if (b.dropPct != null && nowDist != null && Math.abs(nowDist - b.dropPct) >= T.diffHeadroomPts) lines.push(`Headroom on the ${name} loan ${b.dropPct.toFixed(0)}% → ${nowDist.toFixed(0)}%.`);
+    if (b.dropPct != null && nowDist != null) {
+      const ch = Math.abs(nowDist - b.dropPct); // a loop's room is a few points wide, so a quarter of it counts, or half a point
+      if (loop ? ch >= 0.5 || ch >= 0.25 * Math.abs(b.dropPct) : ch >= T.diffHeadroomPts) lines.push(loop ? `Ratio room on the ${name} loan ${pc1(b.dropPct)} → ${pc1(nowDist)}.` : `Headroom on the ${name} loan ${b.dropPct.toFixed(0)}% → ${nowDist.toFixed(0)}%.`);
+    }
     if (b.apr != null && p.borrowApr != null && Math.abs(p.borrowApr - b.apr) * 100 >= T.diffRateBps) lines.push(`${name} rate ${pct(b.apr)} → ${pct(p.borrowApr)}.`);
     if (b.debtUsd && Math.abs(p.debtUsd / b.debtUsd - 1) * 100 >= T.diffDebtPct) lines.push(`${name} debt ${usd(b.debtUsd)} → ${usd(p.debtUsd)}.`);
   }
@@ -533,7 +564,7 @@ function shortName(p) { return venueShort(p).split(" · ")[0]; }
 // "Morpho" when it's the only Morpho loan, "Morpho cbBTC → USDC" when another loan shares the venue.
 function loanName(p) { const v = shortName(p); const dup = pos.positions.some((x) => x !== p && shortName(x) === v); return dup && p.pair ? `${v} ${p.pair.coll.symbol} → ${p.pair.debt.symbol}` : v; }
 function cacheKey(ws) { return `${args.chain || "all"}|${[...ws].map((w) => w.toLowerCase()).sort().join(",")}`; }
-function loadCache(ws) { const p = cachePath(); if (!p) return null; try { const c = JSON.parse(readFileSync(p, "utf8")); if (c.key !== cacheKey(ws) || Date.now() - new Date(c.at).getTime() > CACHE_MS) return null; return c; } catch { return null; } }
+function loadCache() { const p = cachePath(); if (!p) return null; try { const c = JSON.parse(readFileSync(p, "utf8")); if (!Array.isArray(c.runs) || !c.runs.length || Date.now() - new Date(c.at).getTime() > CACHE_MS) return null; return c; } catch { return null; } }
 function saveCache(ws, rs) { const p = cachePath(); if (!p) return; try { writeFileSync(p, JSON.stringify({ key: cacheKey(ws), at: new Date().toISOString(), runs: rs.map(({ prev, ...r }) => r) })); } catch {} }
 function offerShort(v, p) {
   const label = typeof v === "string" ? v : v?.venue || "";

@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fetchOffers, loadMem, saveMem, pairLinkOnce, venueName } from "./lib/offers.mjs";
-import { bps, fmtPerM, dollarsPerYear, trustedHistory, fitsDepth } from "./lib/rules.mjs";
+import { bps, fmtPerM, dollarsPerYear, trustedHistory, fitsDepth, parseSize, worthRefi, REFI_MIN_BPS, REFI_MIN_USD_YR } from "./lib/rules.mjs";
 import { mdTable, shareBar } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -20,21 +20,25 @@ const DEEP = 1e6;
 const args = parseArgs(process.argv.slice(2));
 if (!args.coll || !args.borrow) die("usage: node cost.mjs --coll <sym> --borrow <sym> [--size 500k] [--ltv 60] [--paying 5.4 | --venue aave [--paying 5.4]] [--chain ethereum|base|arbitrum] [--json]");
 const chainId = T.chains[String(args.chain || "ethereum").toLowerCase()]; if (!chainId) die(`unknown chain "${args.chain}"`);
-const size = args.size ? Number(String(args.size).replace(/[$,_kKmM]/g, (m) => ({ k: "e3", K: "e3", m: "e6", M: "e6" }[m] || ""))) : null;
-const ltvArg = args.ltv != null ? Number(String(args.ltv).replace("%", "")) : null;
-let paying = args.paying != null ? Number(String(args.paying).replace("%", "")) : null;
+const size = parseSize(args.size); if (Number.isNaN(size)) die(`I couldn't read the size "${args.size}". Say it like 500k, 2m or 1b.`);
+const ltvArg = args.ltv != null ? Number(String(args.ltv).replace("%", "")) : null; if (ltvArg != null && !(ltvArg > 0 && ltvArg <= 100)) die(`I couldn't read the LTV "${args.ltv}". Say it as a percentage, 60 say.`);
+let paying = args.paying != null ? Number(String(args.paying).replace("%", "")) : null; if (paying != null && !Number.isFinite(paying)) die(`I couldn't read the rate "${args.paying}". Say it as a percentage, 5.4 say.`);
 const myVenue = args.venue ? String(args.venue).toLowerCase() : null;
 const venueFilter = args.venues ? String(args.venues).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean) : null;
-// Room for the loan: with a size, the 10%-of-depth rule market.mjs uses (lib/rules.mjs); without one, a $1M floor.
-const roomFor = (o) => (size ? fitsDepth(size, o.liquidityUsd) : (o.liquidityUsd || 0) >= DEEP);
+// Room for the loan: the 10%-of-depth rule market.mjs uses (lib/rules.mjs), at the size given or at $1M, the unit the unsized
+// answer is priced in. canFund: the venue has the whole amount, at any share of its book.
+const roomFor = (o) => fitsDepth(size || DEEP, o.liquidityUsd);
+const canFund = (o) => (o.liquidityUsd || 0) >= (size || DEEP);
 
 const c = alias(args.coll), b = alias(args.borrow);
 const ca = addr(chainId, c), ba = addr(chainId, b); if (!ca || !ba) die(`I don't have ${!ca ? disp(c) : disp(b)} mapped on ${chainName(chainId)}.`);
-const m = await fetchOffers(chainId, ca, ba);
+let m;
+try { m = await fetchOffers(chainId, ca, ba); }
+catch (e) { console.log(`I couldn't reach Loanscape for ${disp(c)} → ${disp(b)} just now (${e.message}), so there's no rate to work from. Say retry and I'll try again.`); process.exit(0); }
 const coll = m.coll?.symbol || disp(c), borrow = m.borrow?.symbol || disp(b), pair = `${coll} → ${borrow}`;
 const collYield = Math.round(Number(m.coll?.yieldApr || 0) * 100) / 100, borrowYield = Math.round(Number(m.borrow?.yieldApr || 0) * 100) / 100;
 const r2 = (x) => Math.round(Number(x) * 100) / 100;
-const offers = m.offers.filter((o) => o.apr != null).map((o) => ({ ...o, ...trustedHistory(o), apr: r2(o.apr), rewards: r2(o.rewards || 0) }));
+const offers = m.offers.filter((o) => o.apr != null).map((o) => ({ ...o, ...trustedHistory(o), rewards: r2(o.rewards || 0) })); // apr stays unrounded: a gap is computed, then shown
 const mem = loadMem();
 const out = { chainId, pair, collYield, borrowYield, size, ltv: ltvArg, paying, venue: myVenue, text: null };
 out.text = paying != null || myVenue ? refiCheck() : loanCost();
@@ -43,9 +47,11 @@ console.log(args.json ? JSON.stringify({ ...out, offers: offers.map(({ sparkline
 
 // ---------------- loan cost ----------------
 function loanCost() {
-  const pool = venueFilter ? offers.filter((o) => venueFilter.some((v) => matchVenue(o, v))) : offers;
-  const picks = bestPerProtocol(pool.filter((o) => (o.liquidityUsd || 0) >= (size ? size : DEEP)).sort((a, b) => a.apr - b.apr));
-  if (!picks.length) return `${pair} on ${chainName(chainId)}: nothing${venueFilter ? ` at ${venueFilter.join(", ")}` : ""} with ${size ? usdShort(size) : "$1M"} available right now.`;
+  const pool = (venueFilter ? offers.filter((o) => venueFilter.some((v) => matchVenue(o, v))) : offers).filter((o) => ltvArg == null || o.maxLtv == null || o.maxLtv >= ltvArg);
+  // Venues with room first. When none has room, the ones that can fund it at all are priced, and the first line says the loan would move the rate.
+  let picks = bestPerProtocol(pool.filter(roomFor).sort((a, b) => a.apr - b.apr)); let stretched = false;
+  if (!picks.length) { picks = bestPerProtocol(pool.filter(canFund).sort((a, b) => a.apr - b.apr)); stretched = true; }
+  if (!picks.length) return `${pair} on ${chainName(chainId)}: nothing${venueFilter ? ` at ${venueFilter.join(", ")}` : ""}${ltvArg != null ? ` with ${ltvArg}% LTV room` : ""} has ${size ? usdShort(size) : "$1M"} available right now.`;
   const stableDebt = /USD|DAI/i.test(borrow);
   const carry = collYield > 0 && !stableDebt; // borrowing the asset the collateral is a yielding version of: the loop
   const ltv = ltvArg ?? 50;
@@ -57,7 +63,7 @@ function loanCost() {
   if (carry) {
     L.push(`${coll} yields ${pct(collYield)}; ${venueFilter ? name(best.o, offers) : `the cheapest deep venue, ${name(best.o, offers)},`} charges ${pct(best.o.apr)} to borrow ${borrow} against it. Carry ${signed(bps(best.net))} bps per unit borrowed${size ? "" : `, ${fmtPerM(Math.abs(bps(best.net)))}${best.net < 0 ? " against you" : ""}`}.`);
   } else if (collYield > 0) {
-    L.push(`${coll} yields ${pct(collYield)} while you borrow against it. At ${ltv}% LTV that offsets ${(collYield / (ltv / 100)).toFixed(2)} points of borrow rate, so ${name(best.o, offers)}'s ${pct(best.o.apr)} nets to ${pct(best.net)}.`);
+    L.push(`${coll} yields ${pct(collYield)} while you borrow against it. At ${ltv}% LTV that offsets ${(collYield / (ltv / 100)).toFixed(2)} points of borrow rate, so ${name(best.o, offers)}'s ${pct(best.o.apr)} nets to ${pct(best.net)}${best.net < 0 ? ": the collateral's yield more than covers the interest at that LTV. The yield accrues whether or not you borrow; the loan itself still costs " + pct(best.o.apr) : ""}.`);
   } else {
     L.push(`${borrow} against ${coll} costs what it says: no collateral yield to net against. ${venueFilter ? name(best.o, offers) : `Cheapest deep venue ${name(best.o, offers)}`} at ${pct(best.o.apr)}${best.o.rewards ? `, ${pct(best.o.rewards)} of that paid back in rewards, net ${pct(best.net)}` : ""}.`);
     if (ltvArg != null) L.push(`${ltvArg}% LTV doesn't change the rate here; it sets your liquidation price, which needs the collateral amount.`);
@@ -72,6 +78,7 @@ function loanCost() {
   } else if (rows.length === 2) {
     const other = rows.find((r) => r !== best); L.push(`${name(other.o, offers)}: ${pct(other.o.apr)} borrow, ${carry ? `carry ${signed(bps(other.net))} bps` : `net ${pct(other.net)}`}, ${usdShort(other.o.liquidityUsd)} available.`);
   }
+  if (stretched) L.push(`Nothing on this pair has room for ${usdShort(size || DEEP)} under a tenth of its depth; ${name(best.o, offers)} can fund it, at ${pctShare((size || DEEP) / best.o.liquidityUsd)} of its ${usdShort(best.o.liquidityUsd)} book, so expect to move the rate.`);
   if (skipped.length) L.push(`${name(skipped[0].o, offers)} is ${carry ? "better" : "cheaper"} on paper (${carry ? `carry ${signed(bps(skipped[0].net))} bps` : `net ${pct(skipped[0].net)}`}) but ${usdShort(size)} would be ${pctShare(size / skipped[0].o.liquidityUsd)} of its ${usdShort(skipped[0].o.liquidityUsd)} book.`);
   if (size) L.push(`At ${usdShort(size)}: ${carry ? `${usdShort(Math.abs(dollarsPerYear(bps(best.net), size)))} a year ${best.net >= 0 ? "earned" : "paid"} on the spread at ${name(best.o, offers)}` : `${usdShort(dollarsPerYear(bps(best.net), size))} a year${collYield > 0 || best.o.rewards ? " net" : ""} at ${name(best.o, offers)}`}, ${pctShare(size / best.o.liquidityUsd)} of its book.`);
   if (carry) L.push(`Both legs float: the yield and the borrow rate move independently, so the carry can close or flip. At ${ltvS(best.o.maxLtv) || "the venue's max"} LTV the loop allows up to ${best.o.maxLtv ? (1 / (1 - best.o.maxLtv / 100)).toFixed(1) : "?"}x exposure; liquidation risk scales with it.`);
@@ -110,12 +117,17 @@ function refiCheck() {
     : disagree ? `You quoted ${pct(quoted)} ${here}; the nearest ${plainVenue} market I can see, ${name(mine, offers)}, shows ${pct(mine.apr)}, ${Math.abs(drift)} bps ${drift > 0 ? "above" : "below"} that. If you're in a different market there, your rate stands, so I'm comparing against ${pct(quoted)}.`
     : `You're paying ${pct(paying)} ${here}.`;
   if (!alts.length) { P.push(size ? `${youPay} Keeping a loan under a tenth of what's available, nothing else on this pair can take ${usdShort(size)}${ltvArg != null ? ` with ${ltvArg}% LTV room` : ""} right now.` : `${youPay} Nothing else with ${usdShort(need)} available${ltvArg != null ? ` and ${ltvArg}% LTV room` : ""} is on this pair right now.`); if (thinLine) P.push(thinLine); return P.join("\n\n"); }
-  const best = alts[0]; const gap = bps(paying - best.apr);
-  const swing = typicalWeeklySwing(offers);
+  const best = alts[0]; const gap = bps(paying - best.apr); const perYear = size ? dollarsPerYear(gap, size) : null;
+  const swing = typicalWeeklySwing(offers) || null; // 0 is "no history", not a swing to divide by
   if (gap <= 0) {
     P.push(`${youPay} Nothing deep beats it today; the cheapest alternative is ${name(best, offers)} at ${pct(best.apr)}${gap < 0 ? `, ${Math.abs(gap)} bps more` : ""}.`);
+  } else if (!worthRefi(gap, perYear)) {
+    // The same bar the wallet brief uses (lib/rules.mjs), so "am I overpaying?" and /loanscape never disagree on the same loan.
+    const bar = [gap < REFI_MIN_BPS ? `${REFI_MIN_BPS} bps` : null, perYear != null && perYear < REFI_MIN_USD_YR ? `$${REFI_MIN_USD_YR} a year` : null].filter(Boolean).join(" and ");
+    P.push(`${youPay} ${name(best, offers)} is the cheapest with room, at ${pct(best.apr)}: ${gap} bps less${size ? `, about ${usdShort(perYear)} a year on ${usdShort(size)}` : `, ${fmtPerM(gap)}`}, under the ${bar} that makes a move worth it${swing != null ? `; this pair's typical weekly swing is ${swing} bps` : ""}.`);
+    if (thinLine) P.push(thinLine);
   } else {
-    P.push(`${youPay} ${name(best, offers)} charges ${pct(best.apr)}, ${gap} bps less: ${size ? `${usdShort(dollarsPerYear(gap, size))} a year on ${usdShort(size)}` : fmtPerM(gap)}.`);
+    P.push(`${youPay} ${name(best, offers)} charges ${pct(best.apr)}, ${gap} bps less: ${size ? `${usdShort(perYear)} a year on ${usdShort(size)}` : fmtPerM(gap)}.`);
     const depth = `${name(best, offers)} has ${usdShort(best.liquidityUsd)} available${size ? `, so you'd be ${pctShare(size / best.liquidityUsd)} of it` : ""}${best.maxLtv != null ? `, and its max LTV is ${ltvS(best.maxLtv)}` : ""}.`;
     const ctx = swing != null ? (gap >= swing * 2 ? `The gap is ${(gap / swing).toFixed(1)}x this pair's typical weekly swing of ${swing} bps, so it isn't noise.` : gap >= swing ? `The gap is about this pair's typical weekly swing of ${swing} bps; it could close on its own.` : `The gap is inside this pair's typical weekly swing of ${swing} bps; it may close before a move pays for itself.`) : null;
     P.push([depth, ctx].filter(Boolean).join(" "));

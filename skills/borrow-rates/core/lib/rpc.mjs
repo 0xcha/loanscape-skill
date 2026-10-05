@@ -16,7 +16,8 @@ export const RPCS = {
   42161: [{ url: "https://arbitrum-one-rpc.publicnode.com", batch: 10 }, { url: "https://arb1.arbitrum.io/rpc", batch: 10 }, { url: "https://arb-pokt.nodies.app", batch: 10 }, { url: "https://arbitrum-one.public.blastapi.io", batch: 10 }, { url: "https://arbitrum.drpc.org", batch: 3 }],
 };
 const DEFAULT_BATCH = 10, MAX_INFLIGHT = 4, CALL_BUDGET_MS = 30000, MAX_COOLDOWN_MS = 5000;
-const UA = "loanscape-skill/0.1 (+https://loanscape.lotuslabs.net)";
+import { VERSION } from "./version.mjs";
+const UA = `loanscape-skill/${VERSION} (+https://loanscape.lotuslabs.net)`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const host = (url) => { try { return new URL(url).host; } catch { return url; } };
 let curlFirst = false; // set once fetch fails and curl gets through (a proxy), so later requests don't wait on fetch again

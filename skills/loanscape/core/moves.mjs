@@ -22,7 +22,9 @@ const mem = loadMem();
 const args = parseArgs(process.argv.slice(2));
 const chainArg = args.chain ? T.chains[String(args.chain).toLowerCase()] : null; if (args.chain && !chainArg) die(`unknown chain "${args.chain}"`);
 const days = Math.max(1, Math.min(30, Number(args.days || 7)));
-const only = args.pair ? String(args.pair).toUpperCase().replace(/^\$/, "").split(/[\/→>-]+/).map((s) => T.aliases[s.trim()] || s.trim()) : null;
+// "ETH/USDC", "ETH USDC", "eth-usdc", "BTC USDC" (BTC reads as cbBTC, the deeper of the two) → [coll, borrow]
+const only = args.pair ? String(args.pair).toUpperCase().replace(/^\$/, "").split(/[\/→>\-\s]+/).filter(Boolean).map((s) => { const a = T.aliases[s] || s; return a === "BTC" ? "CBBTC" : a; }) : null;
+if (only && only.length !== 2) die(`I need a pair, "ETH/USDC" say; I read "${args.pair}".`);
 const pairs = only ? [only] : CURATED;
 // Pair mode reads one chain (Ethereum unless named). Cross mode with no chain named sweeps Ethereum, Base and Arbitrum.
 const chainIds = chainArg ? [chainArg] : only ? [1] : [1, 8453, 42161];
@@ -30,7 +32,8 @@ const chainId = chainIds[0];
 
 async function scan(cid) {
   const markets = (await Promise.all(pairs.map(async ([c, b]) => {
-    const ca = addr(cid, c), ba = addr(cid, b); if (!ca || !ba) return [];
+    const ca = addr(cid, c), ba = addr(cid, b);
+    if (!ca || !ba) return only ? [{ chainId: cid, pair: `${disp(c)} → ${disp(b)}`, error: `I don't have ${!ca ? disp(c) : disp(b)} mapped on ${chainName(cid)}.`, unmapped: true }] : [];
     try {
       const m = await fetchOffers(cid, ca, ba);
       return m.offers.filter((o) => o.apr != null).map((o) => ({ ...o, ...trustedHistory(o), chainId: cid, pair: `${m.coll?.symbol || disp(c)} → ${m.borrow?.symbol || disp(b)}`, coll: m.coll?.symbol || disp(c), borrow: m.borrow?.symbol || disp(b) }));
@@ -41,7 +44,9 @@ async function scan(cid) {
   // A pooled venue (Aave, Spark, Compound, Fluid) is one market per borrow asset whatever the collateral; report it once.
   // Isolated markets (Morpho) are one per pair. marketRef identifies the underlying market when the API gives one.
   const seen = new Map();
-  for (const m of live) { const k = m.protocol === "morpho-blue" ? `${m.protocol}|${m.marketRef || m.venue}|${m.pair}` : `${m.protocol}|${/prime/i.test(m.venue) ? "prime" : "main"}|${m.borrow}|${m.apr}`; if (seen.has(k)) { seen.get(k).colls.push(m.coll); m.dup = true; } else { m.colls = [m.coll]; seen.set(k, m); } }
+  // Fluid is isolated per vault, so its identity keeps the venue label; a pooled venue's rate is not part of its identity, or a pair
+  // refreshed a minute apart would read as two markets.
+  for (const m of live) { const k = m.protocol === "morpho-blue" ? `${m.protocol}|${m.marketRef || m.venue}|${m.pair}` : m.protocol === "fluid" ? `${m.protocol}|${m.marketRef || m.venue}|${m.pair}` : `${m.protocol}|${/prime/i.test(m.venue) ? "prime" : "main"}|${m.borrow}`; if (seen.has(k)) { seen.get(k).colls.push(m.coll); m.dup = true; } else { m.colls = [m.coll]; seen.set(k, m); } }
   return { chainId: cid, live, uniq: live.filter((m) => !m.dup), errs };
 }
 const scans = await Promise.all(chainIds.map(scan));
@@ -87,7 +92,8 @@ function renderCross() {
   const total = scans.reduce((s, sc) => s + sc.uniq.length, 0);
   const per = scans.map((sc) => ({ sc, lines: crossLines(sc) }));
   const home = per[0]; const homeName = chainName(home.sc.chainId);
-  const cover = `${listJoin(chainIds.map(chainName))}, ${days} day${days === 1 ? "" : "s"}, ${total} markets.`;
+  const failed = scans.flatMap((sc) => sc.errs); const cover = `${listJoin(chainIds.map(chainName))}, ${days} day${days === 1 ? "" : "s"}, ${total} markets${failed.length ? `; ${failed.length} pair${failed.length === 1 ? "" : "s"} didn't load` : ""}.`;
+  if (!total && failed.length) return `I couldn't reach Loanscape just now (${failed[0].error}), so I can't say what moved. Say retry and I'll try again.`;
   if (!scans.some((sc) => sc.uniq.some((m) => m.hasHistory))) return `No trusted rate history right now. ${cover}`;
   if (home.lines.length) { L.push(`${home.lines[0]} ${cover}`); if (home.lines[1]) L.push(home.lines[1]); }
   else { const widest = home.sc.uniq.filter((m) => m.deep && m.hasHistory).sort((a, b) => Math.abs(b.change) - Math.abs(a.change))[0]; L.push(`${homeName} quiet: nothing with real depth moved ${R.moverBps} bps or more${widest ? `; the most was ${where(widest)}, ${widest.change > 0 ? "up" : "down"} ${Math.abs(widest.change)} bps` : ""}. ${cover}`); }
@@ -111,7 +117,9 @@ function flipsByPair(hist) {
 
 // ---------------- render: one pair ----------------
 function renderPair() {
-  const ms = uniq.filter((m) => m.hasHistory).sort((a, b) => a.apr - b.apr); const pair = live[0]?.pair || pairs[0].join(" → ");
+  const ms = uniq.filter((m) => m.hasHistory).sort((a, b) => a.apr - b.apr); const pair = live[0]?.pair || pairs[0].map(disp).join(" → ");
+  if (errs.some((e) => e.unmapped)) return errs.find((e) => e.unmapped).error;
+  if (!live.length && errs.length) return `I couldn't reach Loanscape for ${pair} just now (${errs[0].error}). Say retry and I'll try again.`;
   if (!ms.length) return `${pair} on ${chainName(chainId)}: no trusted rate history right now.`;
   const deep = ms.filter((m) => m.deep); const up = deep.filter((m) => m.change >= 10).length, down = deep.filter((m) => m.change <= -10).length;
   // Direction by count of deep venues, checked against the depth-weighted move; when they disagree, say both.
@@ -124,7 +132,7 @@ function renderPair() {
   const L = [`${pair} on ${chainName(chainId)}, last ${days} days: ${verdict}.`, ""];
   const ranked = [...ms].sort((a, b) => (b.deep - a.deep) || (Math.abs(b.change) - Math.abs(a.change))).slice(0, 7);
   const rows = ranked.map((m) => [name(m, ms), pct(m.apr), Math.abs(m.change) >= 10 ? `${m.change > 0 ? "+" : "−"}${Math.abs(m.change)} bps` : "flat", sparkline(m.sparkline, m.apr), Math.abs(m.streak) >= R.streakDays && Math.abs(m.change) >= 10 ? `${Math.abs(m.streak)} days ${m.streak > 0 ? "up" : "down"}` : "", m.apr >= m.hi - 0.005 ? "high" : m.apr <= m.lo + 0.005 ? "low" : m.posInRange >= 0.9 ? "near high" : m.posInRange <= 0.1 ? "near low" : "", Math.abs(m.biggestStep.bps) >= R.stepBps ? `${Math.abs(m.biggestStep.bps)} bps ${m.biggestStep.bps > 0 ? "jump" : "drop"} ${ago(m.biggestStep.daysAgo)}${m.biggestStep.reverted ? ", reverted" : ""}` : "", m.deep ? "" : `thin, ${usdShort(m.liquidityUsd)}`]);
-  const H = ["venue", "now", `${days}d`, "30 days", "run", "30d", "step", ""]; const A = ["l", "r", "r", "l", "l", "l", "l", "l"];
+  const H = ["venue", "now", `${days}d`, "30 days", "run", "range", "step", ""]; const A = ["l", "r", "r", "l", "l", "l", "l", "l"];
   const keep = H.map((_, i) => i < 4 || rows.some((r) => r[i])); const HH = H.filter((_, i) => keep[i]); const AA = A.filter((_, i) => keep[i]); const RR = rows.map((r) => r.filter((_, i) => keep[i]));
   L.push(mdTable(HH, RR, AA, -1));
   const suspect = live.filter((m) => m.suspect); if (suspect.length) L.push("", `${listJoin([...new Set(suspect.map((m) => name(m, ms)))])} left out: rate history disagrees with the live rate.`);

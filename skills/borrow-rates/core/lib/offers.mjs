@@ -21,7 +21,8 @@ const LINK_TTL_MS = 6 * 3600 * 1000;
 const CANDIDATES = [process.env.LOANSCAPE_HOME, join(homedir(), ".loanscape"), join(process.cwd(), ".claude", "loanscape")].filter(Boolean);
 function writable(dir) { try { if (!existsSync(dir)) mkdirSync(dir, { recursive: true }); const probe = join(dir, ".w"); writeFileSync(probe, "1"); try { unlinkSync(probe); } catch {} return true; } catch { return false; } }
 let HOME = null;
-export function memHome() { if (HOME !== null) return HOME; for (const d of CANDIDATES) { if (writable(d)) { HOME = d; return HOME; } } HOME = ""; return HOME; }
+// The project fallback holds wallet addresses and positions, so it ignores itself: a `git add -A` there commits nothing from it.
+export function memHome() { if (HOME !== null) return HOME; for (const d of CANDIDATES) { if (writable(d)) { if (d === CANDIDATES[CANDIDATES.length - 1] && !process.env.LOANSCAPE_HOME) { try { writeFileSync(join(d, ".gitignore"), "*\n"); } catch {} } HOME = d; return HOME; } } HOME = ""; return HOME; }
 export function memPath() { const h = memHome(); return h ? join(h, "memory.json") : null; }
 // Read from the same home we write to, never from another candidate: a fresh LOANSCAPE_HOME must not see ~/.loanscape,
 // and "forget my wallet" must not bring back a wallet saved somewhere else.
@@ -41,7 +42,13 @@ export function pairLinkOnce(mem, chainId, collSym, borrowSym, rank = null) {
 // Morpho carries its LLTV ("Morpho 94.5%") only when the context list holds more than one Morpho market.
 export function venueName(o, ctx) {
   const v = (typeof o === "string" ? o : o.venue) || ""; const proto = typeof o === "string" ? "" : o.protocol;
-  if (proto === "morpho-blue" || /^Morpho/.test(v)) { const dup = ctx && ctx.filter((x) => x.protocol === "morpho-blue" || /^Morpho/.test(x.venue || "")).length > 1; const m = v.match(/(\d+(?:\.\d+)?)% LLTV/); return dup && m ? `Morpho ${m[1]}%` : "Morpho"; }
+  if (proto === "morpho-blue" || /^Morpho/.test(v)) {
+    const peers = ctx ? ctx.filter((x) => x.protocol === "morpho-blue" || /^Morpho/.test(x.venue || "")) : []; const m = v.match(/(\d+(?:\.\d+)?)% LLTV/);
+    if (peers.length < 2 || !m) return "Morpho";
+    // Two markets at the same LLTV (different oracle or IRM) would read as one name; the market hash tells them apart.
+    const twin = peers.some((x) => x !== o && (x.venue || "").includes(`${m[1]}% LLTV`)); const ref = typeof o === "string" ? null : o.marketRef;
+    return twin && ref ? `Morpho ${m[1]}% (${String(ref).replace(/^0x/, "").slice(0, 6)})` : `Morpho ${m[1]}%`;
+  }
   if (/^Fluid/.test(v)) return "Fluid";
   if (/^Compound/.test(v)) return "Compound";
   if (/^Spark/.test(v)) return "Spark";

@@ -3,6 +3,7 @@
 // Type 1 vaults (one collateral token, one debt token) are priced fully. Smart-collateral / smart-debt vaults (types 2-4)
 // hold DEX shares; those are reported with share amounts and no USD until the share pricing is verified.
 import { makeRpc, postJson } from "./rpc.mjs";
+import { VERSION } from "./version.mjs";
 import { encode, words, asUint, asAddress } from "./abi.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -11,7 +12,7 @@ async function vaultList(api, chainId) {
   if (vaultCache.has(chainId)) return vaultCache.get(chainId);
   const url = `${api}/v2/${chainId}/vaults`;
   let text;
-  try { const r = await fetch(url, { headers: { "user-agent": "loanscape-skill/0.1" }, signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error(`HTTP ${r.status}`); text = await r.text(); }
+  try { const r = await fetch(url, { headers: { "user-agent": `loanscape-skill/${VERSION}` }, signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error(`HTTP ${r.status}`); text = await r.text(); }
   catch (e) { if (String(e.message).startsWith("HTTP")) throw e; text = execFileSync("curl", ["-sS", "--max-time", "20", url], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26 }); }
   const list = JSON.parse(text); const byAddr = new Map(list.map((v) => [v.address.toLowerCase(), v]));
   vaultCache.set(chainId, byAddr); return byAddr;

@@ -1,6 +1,6 @@
-# Testing the manager side
+# Testing
 
-Both sessions test the same way. Wallets are public addresses whose positions change; re-check before relying on a specific number.
+Wallets are public addresses whose positions change; re-check before relying on a specific number.
 
 ## Live regression wallets (2026-09-22)
 
@@ -14,7 +14,7 @@ Both sessions test the same way. Wallets are public addresses whose positions ch
 | `0x196a5888d5603a4363cfaf9d75abf1bc961cd37d` | Fluid type-1 plus a smart-collateral vault (share side unpriced) |
 | `0x761e0f091b68b6120191eb0b04f43867b94d66c7` | Aave e-mode on two instances plus a Fluid smart-collateral-and-debt vault |
 | `0x0774b5B15B0CEe5E2e14814CCF4d4611fF78CcF5` | Morpho on a pair Loanscape does not cover (no market context, no refi) |
-| `0x462a336dCac6eaF544106266914caa5a18b831d0` | wstETH/WETH and weETH/WETH loops on Aave e-mode, Spark and Morpho at 90–94% LTV (found 2026-10-05 via Morpho's API; Crews's IPOR Fusion repro was 0xb8a4…715e) |
+| `0x462a336dCac6eaF544106266914caa5a18b831d0` | wstETH/WETH and weETH/WETH loops on Aave e-mode, Spark and Morpho at 90–94% LTV (found 2026-10-05 via Morpho's API) |
 | `vitalik.eth` | ENS resolve, no positions |
 
 Run with a throwaway memory: `LOANSCAPE_HOME=$TMPDIR/ls node core/brief.mjs --wallet <w> --chain ethereum`. Ignore `failed to copy trust settings` on stderr.
@@ -52,3 +52,10 @@ The brief has three states and each must read differently: checked and quiet, pa
 Never test against your real crontab. Put a fake `crontab` first on `PATH` that keeps its table in a temp file (`-l` prints it or says "no crontab for …" and exits 1; `-` writes stdin to it), and point `HOME` and `LOANSCAPE_HOME` at a temp dir. Seed the table with unrelated jobs, including ones that mention `morning.sh`. Run under `/bin/sh` (dash on Debian and Ubuntu) as well as bash. Then check: an install adds exactly one line ending in `# loanscape-morning-brief` and leaves every other line identical; a second identical install writes nothing; `--remove` gives back the original table exactly; `--dry-run` and `--remove --dry-run` call no `crontab -` and create no files; a backup in `$LOANSCAPE_HOME` matches the table from before each change; a crontab that can't be read is never overwritten. For macOS, a fake `uname` that prints `Darwin`, a no-op `launchctl` and `LAUNCH_AGENTS_DIR` set to a temp dir exercise the launchd path.
 - **Loops:** `0x462a336d…831d0`. The liquidation cell reads `wstETH/WETH −x%`, never a USD price; the urgent row's follow-up asks about levering down; no "above the working ceiling" line. `--move` has four steps (do nothing with carry and ratio room, lever down with the unwind that doubles the room and the carry it gives up, refinance, close) and never says add collateral. `--ladder` steps the ratio −1/−2/−3%, and `--shock 20` says an ETH move leaves LTV and health where they are.
 - **Refinance bar:** a cheaper venue is worth a line only at 20 bps **and** $100 a year. On the loop wallet above, Aave e-mode 5 bps under a $24M Morpho loan (~$12k a year) must not print; `--move` says it misses the 20 bps bar and names only that bar.
+- **Loops that aren't wstETH:** `0xA021D74D…30d1a7` (rETH → WETH, no yield figure from the API), `0x018d6CC9…37156` (ezETH, no kind from the API), `0x805Ba2f2…2Ae26` (LBTC → WBTC), `0x52aC2D67…3F6F7` (sUSDe → USDT). Every one reads on the ratio, says "no yield figure" rather than a 0% carry, and gets lever-down, never add-collateral.
+- **Mixed position is not a loop:** a wstETH → WETH loan with a USDC debt beside it (make one by editing `cache.json`) must read as volatile: `--shock 20` moves it, the urgent bar is 15%, no carry line.
+- **Follow-ups are about the last brief:** remember wallet A, run `--wallet B`, then `--ladder 1` and `--move 1` with no wallet must name B's first row. A brief read with `--chain ethereum` must still answer follow-ups from cache.
+- **--no-save:** a brief with `--no-save` leaves `memory.json` without that wallet and `cache.json` with it, so follow-ups work.
+- **Market contrast:** on a chain where the cheapest venue is thin (ETH → USDC on Base), the plain read's "above that" venue must be the cheapest venue with more room, and `--size` on the same chain must pick that same venue. `--size 1m` on Arbitrum lists every crossover, not only the first.
+- **Refinance bar:** `cost.mjs --paying` with a gap under 20 bps, or under $100 a year at the size, says so instead of "isn't noise", matching what `--move` says for the same loan.
+- **No API:** `HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 node core/cost.mjs --coll ETH --borrow USDC --paying 5` and `… moves.mjs` print one "couldn't reach Loanscape" line, no stack trace.

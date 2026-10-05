@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fetchOffers, deepLink, loadMem, saveMem, pairLinkOnce, venueName } from "./lib/offers.mjs";
-import { bps, fmtPerM, dollarsPerYear, trustedHistory, DEPTH_SHARE, fitsDepth } from "./lib/rules.mjs";
+import { bps, fmtPerM, dollarsPerYear, trustedHistory, DEPTH_SHARE, fitsDepth, parseSize } from "./lib/rules.mjs";
 import { mdTable, sparkline, depthBar, shareBar } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,7 @@ const args = parseArgs(process.argv.slice(2));
 if (!args.coll || !args.borrow) { console.error("usage: node market.mjs --coll ETH --borrow USDC [--chain ethereum|base|arbitrum] [--size 500000] [--venues aave,morpho] [--rank rate|ltv|liquidity|stability] [--table] [--json]"); process.exit(2); }
 const chainId = T.chains[String(args.chain || "ethereum").toLowerCase()]; if (!chainId) die(`unknown chain "${args.chain}"`);
 const rank = String(args.rank || "rate").toLowerCase(); if (!["rate", "ltv", "liquidity", "stability"].includes(rank)) die(`unknown rank "${args.rank}"`);
-const size = args.size ? Number(String(args.size).replace(/[$,_kKmM]/g, (m) => ({ k: "e3", K: "e3", m: "e6", M: "e6" }[m] || ""))) : null;
+const size = parseSize(args.size); if (Number.isNaN(size)) die(`I couldn't read the size "${args.size}". Say it like 500k, 2m or 1b.`);
 const venueFilter = args.venues ? String(args.venues).toLowerCase().split(",").map((s) => s.trim()).filter(Boolean) : null;
 
 const collSyms = expand(args.coll), borrowSyms = expand(args.borrow);
@@ -116,8 +116,10 @@ function sinceAsked(p, top) {
 function whenWord(iso) { const d = new Date(iso), now = new Date(); const days = (now - d) / 86400000; if (days < 1 && now.getDate() === d.getDate()) return "earlier today"; if (days < 2) return "yesterday"; if (days < 7) return `on ${d.toLocaleDateString("en-US", { weekday: "long" })}`; return `on ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`; }
 function contrasts(top, offers) {
   const L = [];
-  const deepest = sortBy(offers, "liquidity")[0]; const cheapest = top[0];
-  if (deepest && cheapest && deepest !== cheapest && cheapest.liquidityUsd && deepest.liquidityUsd / cheapest.liquidityUsd >= 3) L.push({ kind: "depth", text: `${short(deepest)} has ${ratio(deepest.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(deepest.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}). Keeping a loan under a tenth of what's available, ${short(cheapest)} fits up to about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}; above that, ${short(deepest)} at ${pct(deepest.apr)}.` });
+  const cheapest = top[0];
+  // Above the cheapest venue's cap the answer is the next-cheapest venue with more room, not the deepest one on the pair.
+  const next = cheapest?.liquidityUsd ? bestPerProtocol(sortBy(offers, "rate")).find((o) => o !== cheapest && (o.liquidityUsd || 0) > cheapest.liquidityUsd) : null;
+  if (next && next.liquidityUsd / cheapest.liquidityUsd >= 3) L.push({ kind: "depth", text: `${short(next)} has ${ratio(next.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(next.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}). Keeping a loan under a tenth of what's available, ${short(cheapest)} fits up to about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}; above that, ${short(next)} at ${pct(next.apr)}, up to about ${usdShort(next.liquidityUsd * DEPTH_SHARE)}.` });
   const vol = top.find((o) => !o.suspect && o.stability === "volatile" && o.sparkline?.length > 5);
   if (vol) L.push({ kind: "volatile", text: `${short(vol)} ran ${pct(Math.min(...vol.sparkline), 0)} to ${pct(Math.max(...vol.sparkline), 0)} last month.` });
   if (L.length < 2) { const ltvLead = sortBy(offers, "ltv")[0]; if (ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3) L.push({ kind: "ltv", text: `Most borrowing power is ${short(ltvLead)} at ${ltvS(ltvLead.maxLtv)} LTV, for ${pct(ltvLead.apr)}.` }); }
@@ -133,12 +135,14 @@ function sized(pair, offers, link) {
   const best = fits[0] || stretch[0];
   L.push(`For ${usdShort(size)} of ${pair} on ${chainName(chainId)}: ${short(best)} at ${pct(best.apr)}, where you'd be ${pctShare(size / best.liquidityUsd)} of the book.`);
   if (fits.length === byRate.length && byRate.length > 1) { const dearest = byRate[byRate.length - 1]; L.push(`Every venue can take ${usdShort(size)}, so the cheapest rate simply wins; the spread to ${short(dearest)} at ${pct(dearest.apr)} is about ${usdShort(dollarsPerYear(bps(dearest.apr - best.apr), size))} a year.`); }
-  const cheaper = byRate.find((o) => o.apr < best.apr && o !== best);
-  if (cheaper) {
-    const bps = Math.round((best.apr - cheaper.apr) * 100);
-    if (cheaper.liquidityUsd && size <= cheaper.liquidityUsd) L.push(`${short(cheaper)} is ${bps} bps cheaper but ${usdShort(size)} is ${pctShare(size / cheaper.liquidityUsd)} of what's there, so expect to move the rate.`);
+  const cheaperAll = byRate.filter((o) => o.apr < best.apr && o !== best && o.liquidityUsd);
+  if (cheaperAll.length) {
+    const cheaper = cheaperAll[0]; const bps = Math.round((best.apr - cheaper.apr) * 100);
+    if (size <= cheaper.liquidityUsd) L.push(`${short(cheaper)} is ${bps} bps cheaper but ${usdShort(size)} is ${pctShare(size / cheaper.liquidityUsd)} of what's there, so expect to move the rate.`);
     else L.push(`${short(cheaper)} is ${bps} bps cheaper but only has ${usdShort(cheaper.liquidityUsd)} available.`);
-    L.push(`Under about ${usdShort(cheaper.liquidityUsd * DEPTH_SHARE)}, ${short(cheaper)}. Above, ${short(best)}.`);
+    // Each cheaper venue holds the answer up to a tenth of its depth; the next one that fits more takes over from there.
+    const ladder = []; let cap = 0; for (const o of cheaperAll) { const c = o.liquidityUsd * DEPTH_SHARE; if (c > cap) { ladder.push({ o, cap: c }); cap = c; } }
+    L.push(`${ladder.map(({ o, cap }, i) => (i === 0 ? `Under about ${usdShort(cap)}, ${short(o)}` : `${usdShort(ladder[i - 1].cap)} to ${usdShort(cap)}, ${short(o)}`)).join("; ")}. Above, ${short(best)}.`);
   } else if (best.maxLtv != null) L.push(`Max LTV there is ${best.maxLtv}%; ${usdShort(size)} needs about ${usdShort(size / (best.maxLtv / 100))} of ${pair.split(" → ")[0]} at the limit, more for headroom.`);
   if (link) L.push(link);
   return paragraphs(L);
@@ -148,15 +152,16 @@ function headToHead(pair, offers, link, p) {
   const picks = bestPerProtocol(sortBy(offers, "rate"));
   if (picks.length < 2) return read(pair, offers, link, p);
   if (size) {
-    const can = picks.filter((o) => o.liquidityUsd && size <= o.liquidityUsd);
+    const can = picks.filter((o) => fitsDepth(size, o.liquidityUsd));
     if (!can.length) {
-      const L = [`Neither can take ${usdShort(size)} of ${pair} on ${chainName(chainId)} today: ${picks.map((o) => `${short(o, picks)} has ${usdShort(o.liquidityUsd)} available`).join(", ")}.`];
+      const L = [`Neither has room for ${usdShort(size)} of ${pair} on ${chainName(chainId)} today, keeping a loan under a tenth of what's available: ${picks.map((o) => `${short(o, picks)} has ${usdShort(o.liquidityUsd)}`).join(", ")}.`];
       return L.concat(sized(pair, p.offers, link).split("\n")).join("\n");
     }
     const [a, b] = can.length >= 2 ? can : [can[0], picks.find((o) => o !== can[0])];
-    const L = [`For ${usdShort(size)} of ${pair} on ${chainName(chainId)}: ${short(a, picks)} ${pct(a.apr)}, where you'd be ${pctShare(size / a.liquidityUsd)} of the book${b.liquidityUsd && size <= b.liquidityUsd ? `; ${short(b, picks)} ${pct(b.apr)}, ${pctShare(size / b.liquidityUsd)} of its book` : `; ${short(b, picks)} only has ${usdShort(b.liquidityUsd)} available`}.`];
-    const gap = bps(b.apr - a.apr); const bFunds = b.liquidityUsd && size <= b.liquidityUsd;
-    if (gap && !bFunds && gap < 0) L.push(`${short(b, picks)} is ${Math.abs(gap)} bps cheaper on paper, but ${usdShort(b.liquidityUsd)} of depth won't take ${usdShort(size)}.`);
+    const bRoom = fitsDepth(size, b.liquidityUsd), bFunds = b.liquidityUsd && size <= b.liquidityUsd;
+    const L = [`For ${usdShort(size)} of ${pair} on ${chainName(chainId)}: ${short(a, picks)} ${pct(a.apr)}, where you'd be ${pctShare(size / a.liquidityUsd)} of the book${bRoom ? `; ${short(b, picks)} ${pct(b.apr)}, ${pctShare(size / b.liquidityUsd)} of its book` : bFunds ? `; ${short(b, picks)} ${pct(b.apr)}, but ${usdShort(size)} would be ${pctShare(size / b.liquidityUsd)} of its book, past the tenth where you'd move the rate` : `; ${short(b, picks)} only has ${usdShort(b.liquidityUsd)} available`}.`];
+    const gap = bps(b.apr - a.apr);
+    if (gap && !bRoom && gap < 0) L.push(`${short(b, picks)} is ${Math.abs(gap)} bps cheaper on paper, but ${usdShort(b.liquidityUsd)} of depth ${bFunds ? "is too thin for" : "won't take"} ${usdShort(size)}.`);
     else if (gap) L.push(`${gap > 0 ? short(a, picks) : short(b, picks)} is ${Math.abs(gap)} bps cheaper, about ${usdShort(dollarsPerYear(Math.abs(gap), size))} a year at that size${a.maxLtv != null && b.maxLtv != null && a.maxLtv !== b.maxLtv ? `; max LTV ${ltvS(a.maxLtv)} against ${ltvS(b.maxLtv)}` : ""}.`);
     if (link) L.push(link);
     return paragraphs(L);

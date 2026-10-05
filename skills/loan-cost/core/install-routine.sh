@@ -2,6 +2,8 @@
 # Schedule the morning brief.  ./install-routine.sh [--at HH:MM] [--remove] [--dry-run]
 # macOS: a launchd agent in ~/Library/LaunchAgents (survives reboots, runs when you're logged in).
 # Linux: one crontab line, tagged with MARK below. Nothing here needs an LLM or a token; it runs core/morning.sh.
+# The job runs a copy of core/ under $LOANSCAPE_HOME/bin, because the plugin folder this script lives in is versioned and the old
+# version is pruned on update, which would leave the job pointing at nothing. Every install refreshes the copy.
 # Safety: only lines ending in MARK are ever added or removed; every other crontab line is kept as it is. The current crontab
 # (or plist) is backed up to $LOANSCAPE_HOME (default ~/.loanscape) before any change. --dry-run prints the change and writes nothing.
 # Running it twice is the same as running it once.
@@ -25,6 +27,9 @@ LABEL="net.lotuslabs.loanscape.brief"
 MARK="# loanscape-morning-brief"; MARK_RE=" $MARK\$" # ours = ends in the marker, so a line that merely mentions it is not ours
 STATE="${LOANSCAPE_HOME:-$HOME/.loanscape}"
 STAMP="$(date '+%Y%m%d-%H%M%S')"
+BIN="$STATE/bin/core"; RUN="$BIN/morning.sh"
+refresh_copy() { [ $DRY = 1 ] && return 0; mkdir -p "$STATE/bin" && rm -rf "$BIN.new" && cp -R "$HERE" "$BIN.new" && rm -rf "$BIN" && mv "$BIN.new" "$BIN" || { echo "Couldn't copy the scripts to $BIN, so nothing changed."; exit 1; }; }
+[ $REMOVE = 1 ] || refresh_copy
 
 if [ "$(uname)" = "Darwin" ]; then
   DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"; PLIST="$DIR/$LABEL.plist"
@@ -33,9 +38,9 @@ if [ "$(uname)" = "Darwin" ]; then
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>/bin/sh</string><string>$HERE/morning.sh</string></array>
+  <key>ProgramArguments</key><array><string>/bin/sh</string><string>$RUN</string></array>
   <key>StartCalendarInterval</key><dict><key>Hour</key><integer>$H</integer><key>Minute</key><integer>$M</integer></dict>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string><key>HOME</key><string>$HOME</string></dict>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string><key>HOME</key><string>$HOME</string><key>LOANSCAPE_HOME</key><string>$STATE</string></dict>
   <key>StandardOutPath</key><string>$HOME/.loanscape/launchd.out</string>
   <key>StandardErrorPath</key><string>$HOME/.loanscape/launchd.err</string>
   <key>RunAtLoad</key><false/>
@@ -48,7 +53,7 @@ PL
     if [ $DRY = 1 ]; then echo "Would unload and remove $PLIST (dry run, nothing changed)."; exit 0; fi
     backup; launchctl unload "$PLIST" 2>/dev/null; rm -f "$PLIST"; echo "Removed the morning brief."; exit 0
   fi
-  if [ -f "$PLIST" ] && [ "$(plist)" = "$(cat "$PLIST")" ]; then echo "The morning brief is already scheduled for $AT; nothing changed."; exit 0; fi
+  if [ -f "$PLIST" ] && [ "$(plist)" = "$(cat "$PLIST")" ]; then echo "The morning brief is already scheduled for $AT; the scripts it runs were refreshed, nothing else changed."; exit 0; fi
   if [ $DRY = 1 ]; then echo "Would install $PLIST (dry run, nothing changed):"; plist; exit 0; fi
   backup; mkdir -p "$DIR"; plist > "$PLIST"
   launchctl unload "$PLIST" 2>/dev/null; launchctl load "$PLIST" && echo "Morning brief scheduled for $AT every day. Log: ~/.loanscape/brief.log. Remove with: $0 --remove"
@@ -56,8 +61,8 @@ PL
 fi
 
 # Linux: cron. The path is quoted in the line; cron treats % as a newline, and a quote, $, ` or \ would break the quoting.
-case "$HERE" in *[%\"\$\`\\]*) echo "Can't schedule from $HERE: the path has a character cron can't take (% \" \$ \` \\). Move the folder and run this again."; exit 1;; esac
-LINE="$M $H * * * /bin/sh \"$HERE/morning.sh\" >/dev/null 2>&1 $MARK"
+case "$STATE" in *[%\"\$\`\\]*) echo "Can't schedule from $STATE: the path has a character cron can't take (% \" \$ \` \\). Set LOANSCAPE_HOME to a plain path and run this again."; exit 1;; esac
+LINE="$M $H * * * LOANSCAPE_HOME=\"$STATE\" /bin/sh \"$RUN\" >/dev/null 2>&1 $MARK"
 # Read the crontab. "No crontab yet" is an empty one; any other failure stops here, so a crontab we couldn't read is never overwritten.
 if CUR="$(crontab -l 2>/dev/null)"; then :; else
   ERR="$(crontab -l 2>&1 >/dev/null)"
@@ -72,7 +77,7 @@ if [ $REMOVE = 1 ]; then
   [ -n "$OURS" ] || { echo "No morning brief is scheduled in your crontab; nothing changed."; old_note; exit 0; }
   NEW="$KEEP"; DID="Removed the morning brief."; WOULD="Would remove from your crontab (dry run, nothing changed):"; SHOW="$OURS"
 else
-  [ "$OURS" = "$LINE" ] && { echo "The morning brief is already scheduled for $AT; nothing changed."; old_note; exit 0; }
+  [ "$OURS" = "$LINE" ] && { echo "The morning brief is already scheduled for $AT; the scripts it runs were refreshed, nothing else changed."; old_note; exit 0; }
   if [ -n "$KEEP" ]; then NEW="$KEEP
 $LINE"; else NEW="$LINE"; fi
   DID="Morning brief scheduled for $AT every day via cron. Log: ~/.loanscape/brief.log. Remove with: $0 --remove"
