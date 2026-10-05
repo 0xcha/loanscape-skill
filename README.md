@@ -4,26 +4,57 @@ Live onchain borrow-rate comparison inside Claude Code, Claude, Cursor, Codex, a
 
 Built by [Lotus Labs](https://lotuslabs.net). Scaffolded 2026-09-21; works against today's address-based `/api/offers` endpoint, no API changes required.
 
-## Install
+## Install with your agent
 
-**Claude Code** (two commands):
+Give this prompt to an agent that can read repositories, run shell commands and install local skills:
 
+> Install the five Loanscape skills from https://github.com/0xcha/loanscape-skill for this agent. Read the README and relevant SKILL.md files, and inspect scripts before executing them. Use the agent's supported skill location; for Codex, prefer this project's .agents/skills. If an older copy exists, compare it, back it up outside the skill-discovery folders, and update only the Loanscape files, preserving customizations and unrelated skills and settings. Record the source commit and installed location. Respect this environment's software-installation and network permissions; explain any blocker. Then use the installed skill to compare ETH collateral against USDC borrowing. Confirm that live venue results were returned and which revision ran; a successful process exit alone is not enough. Do not read wallets or schedule anything.
+
+The comparison needs **Node 18+** and outbound HTTPS access to `loanscape.lotuslabs.net`. No npm dependencies, API keys or wallet connection are needed. Git is needed for the clone commands below; `curl` is used as a fallback when Node's fetch cannot connect. If your agent cannot install skills, use the host-specific steps below. Skill support and permission prompts differ between hosts.
+
+### Codex
+
+The `skills/` folder contains five self-contained skills, including their scripts. Codex's documented locations are `.agents/skills` in a project and `~/.agents/skills` for personal skills. Start with a project-local install so its scope is clear. See [Codex skill discovery and invocation](https://learn.chatgpt.com/docs/build-skills).
+
+For a new demo folder (the first command stops if that folder already exists):
+
+```sh
+mkdir loanscape-demo && cd loanscape-demo && \
+git clone https://github.com/0xcha/loanscape-skill.git source && \
+mkdir -p .agents/skills && \
+cp -R source/skills/* .agents/skills/
 ```
+
+Record `git -C source rev-parse HEAD`. Review the downloaded skills and scripts before running them. For a repeatable demo, check out a reviewed commit in `source` before copying. Then open Codex in `loanscape-demo`; in the CLI you can keep demo memory separate with:
+
+```sh
+LOANSCAPE_HOME="$PWD/demo-state" codex
+```
+
+Use `/skills` or `$` to select the project-local skill and ask **`$loanscape eth usdc`**. In a fresh task, try **“Where is the cheapest place to borrow USDC against ETH?”**, which should select `borrow-rates`. If the skill is missing, restart Codex. If another installed copy has the same name, check the selected path; Codex can list both. A DNS or network-denied error means the comparison has not passed: grant the API access through your host's approved network controls and retry.
+
+**Verified on 2026-10-05:** Codex CLI 0.159.2 on macOS, Node 26.10.0, and [restored v0.2.23 at `8d113ae`](https://github.com/0xcha/loanscape-skill/commit/8d113aec9fea41659b9600d30a79541f92eab447). Fresh CLI sessions using project-local copies and isolated memory passed both explicit and ordinary-language ETH/USDC comparisons with approved network access. Both final answers matched the script output; Codex still added progress preambles. This verifies the CLI comparison flow, not the desktop skill-picker UI, other agents, or every wallet and scheduling path.
+
+### Claude Code
+
+```text
 /plugin marketplace add 0xcha/loanscape-skill
 /plugin install lotus@lotus-labs
 ```
 
-**Codex, Cursor, Gemini CLI, Copilot** (anything that reads SKILL.md). The `skills/` folder holds self-contained copies of the five skills, scripts included:
+For this Claude Code marketplace install, enable auto-update under `/plugin` → Marketplaces → lotus-labs → enable auto-update. This does not update skills copied into Codex or other agents.
 
-```
+### Other agents and Claude uploads
+
+For Cursor, Gemini CLI, Copilot and other hosts that support Agent Skills, use the installation prompt above and the host's documented skill location. The repository also supports the skills CLI route:
+
+```sh
 npx skills add 0xcha/loanscape-skill
 ```
 
-Or by hand, for Codex: `git clone https://github.com/0xcha/loanscape-skill && cp -R loanscape-skill/skills/* ~/.codex/skills/`. Then `$loanscape`, or just ask a borrow question. Untested in Codex as of 2026-09-23; the format is the shared one, the trigger and shell behaviour aren't verified there.
+That command downloads and runs an installer; follow your environment's software-installation permissions. This route was not part of the Codex comparison test above.
 
-**claude.ai / Claude desktop:** zip the `skills/loanscape/` folder (the self-contained copy, scripts included) and upload it under Settings → Features → Skills. Requires code execution on and a network setting that allows outbound requests.
-
-Then turn on auto-update for the `lotus-labs` marketplace once (`/plugin` → Marketplaces → lotus-labs → enable auto-update), and every version bump reaches you at your next launch.
+For claude.ai / Claude desktop, zip `skills/loanscape/` (including its scripts) and upload it through the host's Skills settings. Code execution and outbound network access must be available. Upload other skill folders separately if you want their workflows too.
 
 ## Try it without installing
 
@@ -76,14 +107,26 @@ Or just type `/loanscape` in the morning. It takes four seconds and remembers yo
 
 ## Updating an installed copy
 
-An install is a copy. `claude plugin update lotus@lotus-labs` only replaces it when the plugin version has gone up, so bump before telling anyone to update:
+A copied skill does not update when the source repository changes. You can give your agent the installation prompt above again and ask it to update the existing installation.
 
-```
-./bump.sh          # patch, e.g. 0.2.0 → 0.2.1
+**Codex and other copied installs:** identify the actual installed path and any duplicate copies first, including older Codex installs under `~/.codex/skills`. Fetch the new source into a separate checkout, record its commit and review the changes. Back up the existing Loanscape folders outside all skill-discovery locations, preserve local customizations, and replace only the five Loanscape folders (`loanscape`, `borrow-rates`, `market-moves`, `loan-cost`, `refinance-check`). Keep wallet memory and settings unchanged. Refresh or restart the host, then repeat the explicit and ordinary-language comparisons above, checking the selected path and live results. Keep the backup until those checks pass; restore it if they fail.
+
+**Claude Code marketplace installs:** use `claude plugin update lotus@lotus-labs`, or enable marketplace auto-update. Updates are version-gated. If an installed copy is broken but the updater says it is current, reinstall with `claude plugin uninstall lotus@lotus-labs && claude plugin install lotus@lotus-labs`. Review any local changes before reinstalling.
+
+**Uploaded skills:** upload the refreshed self-contained folders using the host's replace/update flow, then repeat the comparison.
+
+**v0.2.23 recovery:** the initial `a9ed8f3` commit contained empty skill files and `version.mjs`; `8d113ae` restored them without changing the version. If you installed during that interval, do not rely on the version label alone: reinstall from the restored commit or a later reviewed revision.
+
+### For release maintainers
+
+Bump the release before distributing changed plugin contents:
+
+```sh
+./bump.sh          # patch, e.g. 0.2.23 → 0.2.24
 ./bump.sh minor
 ```
 
-If `update` still says it's at the latest version, `claude plugin uninstall lotus@lotus-labs && claude plugin install lotus@lotus-labs`.
+The script updates the Claude manifests, shared runtime version and plugin skill metadata. It does **not** synchronize the portable `skills/` copies: sync those from the plugin skills/shared core before releasing. Check that every SKILL.md and version.mjs is populated, all release versions agree, and every portable core matches the shared core. Repeat the comparison smoke test against the packaged copies. Use a new version for a corrected release so version-gated updaters can distinguish it.
 
 ## Telemetry
 
