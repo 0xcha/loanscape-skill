@@ -38,6 +38,7 @@ The brief has three states and each must read differently: checked and quiet, pa
 - **Seen findings:** a worth-knowing line that was shown once stays marked seen while it persists, even after being cut by the two-slot cap in a later combined brief (memory `findingKeys`).
 - **Links:** none on Base or Arbitrum reads; the app's page has no chain parameter, so a link would land on Ethereum.
 - **Refinance baselines:** `0xdc6c295e…feefb` (Compound WETH → USDC) showed the chain at 3.99% and Loanscape's feed at 5.57% for the same comet on 2026-09-24, with Spark at 4.18% in between. The brief must print no refi line and `--move 1` must say "can't call it today". A refinance is only quoted when the alternative is cheaper than the chain rate; if the two readings differ by more than 25 bps it must be cheaper than both, and the smaller saving is quoted.
+- **Depth rule:** `0x34A8B066…49BC` on 2026-10-01: Spark had $4.1M available against the $2.2M Morpho WBTC → USDC loan (54%). No refinance line and no `--move` step 4 may offer a venue where the loan is over 10% of its available depth (`fitsDepth` in `lib/rules.mjs`, the rule `market.mjs --size` uses); `--move` names the thinner, cheaper venue as too thin instead. `cost.mjs --coll WBTC --borrow USDC --paying 4.96 --size 2.2m` must agree.
 
 ## Known gaps
 

@@ -30,7 +30,7 @@ Find the scripts first: `CORE` is `$CLAUDE_PLUGIN_ROOT/core` when that variable 
 
 - `--paying` is the rate they quoted, as a percent (`5.4`). If they named the venue but no rate, leave it out; the script uses that venue's live rate and says so in its first line. Don't add that explanation yourself.
 - `--venue` if they named where the loan is. "Aave" alone means Main.
-- `--size` if they gave the loan size; dollars a year and the depth check depend on it. Without it, the script uses "per $1m" and a $1M depth floor.
+- `--size` if they gave the loan size; dollars a year and the depth check depend on it: an alternative counts only if the loan stays under 10% of its available depth, and a cheaper venue that fails that is named as too thin. Without it, the script uses "per $1m" and a $1M depth floor.
 - `--ltv` if they said their LTV; it filters out venues that couldn't hold the loan at that level.
 - Only pass `--chain` when named.
 

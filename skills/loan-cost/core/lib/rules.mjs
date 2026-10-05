@@ -8,11 +8,17 @@
 // 2. Suspect endpoint gate. If a market's last history point disagrees with its live apr by 300 bps or more, the history is
 //    not trusted for that market: no 30-day range, no stability label, no trend. The live apr is truth. (The Loanscape API
 //    misreported Aave Main's history by ~10 points from 2026-08-20 to at least 2026-09-16; the agent was gated, the skill was not.)
+// 3. Depth rule (the skills' own, first written in market.mjs). A loan should stay under DEPTH_SHARE of a venue's available
+//    liquidity or expect to move the rate it came for. market.mjs --size, cost.mjs and the wallet brief all pick venues through
+//    fitsDepth, so a venue that is too thin for a loan in one script is too thin in every script.
 
 export const bps = (x) => Math.round(x * 100);
 export const perMUsdYr = (deltaBps) => deltaBps * 100;
 export const dollarsPerYear = (deltaBps, sizeUsd) => (deltaBps / 10000) * sizeUsd;
 export function fmtPerM(deltaBps) { const v = perMUsdYr(deltaBps); return `${v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${Math.round(v)}`} a year per $1m`; }
+
+export const DEPTH_SHARE = 0.10;
+export const fitsDepth = (sizeUsd, liquidityUsd) => !!liquidityUsd && sizeUsd <= liquidityUsd * DEPTH_SHARE;
 
 export const ENDPOINT_GAP_BPS = 300;
 export const endpointGapOf = (o) => ((o.sparkline || []).length ? Math.round(Math.abs(o.sparkline[o.sparkline.length - 1] - o.apr) * 100) : null);

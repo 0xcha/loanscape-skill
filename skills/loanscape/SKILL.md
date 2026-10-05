@@ -43,7 +43,7 @@ Questions after the brief are answered from the run's data, in the voice, five l
 node "$CORE/brief.mjs" --json
 ```
 
-Each position there carries `mine` (the user's own venue as the market sees it) and `best` (the cheapest alternative with enough depth and LTV room).
+Each position there carries `mine` (the user's own venue as the market sees it), `best` (the cheapest alternative with LTV room where the loan stays under 10% of what's available, the same depth rule as the market comparison) and `thin` (a venue cheaper still that fails only that depth rule, or null).
 
 - "Why is that urgent?", "how far is liquidation?", "what if ETH drops 20%?", "how much can I add or repay?": run the ladder for that row and print it as returned. It never writes memory. The row number is the table's, top to bottom, and it stays the same whether the user asks for the ladder or the moves; "the biggest one" is the row with the largest debt, "the Morpho one" the row whose venue says Morpho. If the question fits more than one row (every loan is BTC-backed and they ask "what if BTC drops 20%?"), run it for each row and print them in order, one blank line between them.
 
@@ -73,7 +73,7 @@ node "$CORE/brief.mjs" --move <row number>
 ## What the script decides, so you don't re-decide it
 
 - **Urgent** (leads the brief): liquidation within a 15% price move, health under 1.15, or a rate that stepped 100 bps or more since the last run.
-- **Worth knowing** (at most two lines): a cheaper venue on the same pair by 20 bps or $100 a year, with enough depth for the loan and LTV room; the rate rising three days running; LTV above the venue's working ceiling.
+- **Worth knowing** (at most two lines): a cheaper venue on the same pair by 20 bps or $100 a year, with LTV room and the loan under 10% of its available depth; the rate rising three days running; LTV above the venue's working ceiling.
 - **Quiet**: everything else, never printed.
 - **Since last time**: collateral price moves of 2% or more, headroom changes of 2 points, rate changes of 10 bps, debt changes of 1%, new or closed positions. Three lines at most.
 

@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fetchOffers, deepLink, loadMem, saveMem, memPath, cachePath, venueName, pairLinkOnce } from "./lib/offers.mjs";
-import { trustedHistory } from "./lib/rules.mjs";
+import { trustedHistory, fitsDepth } from "./lib/rules.mjs";
 import { mdTable } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -75,7 +75,7 @@ for (const p of pos.positions) {
   try {
     const m = await fetchOffers(p.chainId, c.address, d.address);
     m.offers = m.offers.map((o) => ({ ...o, ...trustedHistory(o) })); p.market = m; p.mine = matchOwnOffer(p, m.offers);
-    p.best = bestAlternative(p, m.offers);
+    Object.assign(p, alternatives(p, m.offers));
   } catch (e) { p.marketError = String(e.message || e); }
 }
 if (!cache && status !== "failed") saveCache(walletArgs, runs); // a read that failed is never served to a follow-up
@@ -346,12 +346,12 @@ function moveLadder(n) {
   } else if (q) {
     const partUsd = q.partUsd;
     const sharePct = p.best.liquidityUsd ? (partUsd / p.best.liquidityUsd) * 100 : null;
-    const share = sharePct != null ? ` (your loan is ${sharePct < 0.1 ? "under 0.1%" : sharePct.toFixed(1) + "%"} of it${sharePct >= 10 ? ", enough to move the rate you came for" : ""})` : "";
+    const share = sharePct != null ? ` (your loan is ${sharePct < 0.1 ? "under 0.1%" : sharePct.toFixed(1) + "%"} of it)` : "";
     const fit = p.best.maxLtv != null && p.ltv != null ? `, max LTV ${p.best.maxLtv}% against your ${(p.ltv * 100).toFixed(0)}%` : "";
     const what = p.pair?.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part` : "it";
     const saving = q.range ? `would save at least ${q.bps} bps and ${usd(q.perYear)} a year on ${what} (the chain and Loanscape's feed read your rate ${pct(q.chain)} and ${pct(q.feed)}; the smaller saving is the one quoted)` : `would make ${what} ${usd(q.newCost)} a year instead of ${usd(q.nowCost)}, ${q.bps} bps less`;
-    out.push(`4  Refinance: ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} ${saving}; ${usdShort(p.best.liquidityUsd)} available there${share}${fit}. Repay here, reborrow there, two or three transactions with gas on each.`);
-  } else out.push(`4  Refinance: no venue is cheaper on ${p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}${p.pair.partial ? ", the largest part of this position," : ""}` : "this pair"} with enough depth for your size today.`);
+    out.push(`4  Refinance: ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} ${saving}; ${usdShort(p.best.liquidityUsd)} available there${share}${fit}.${thinNote(p)} Repay here, reborrow there, two or three transactions with gas on each.`);
+  } else out.push(`4  Refinance: no venue is cheaper on ${p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}${p.pair.partial ? ", the largest part of this position," : ""}` : "this pair"} with enough depth for your size today${p.thin ? `, keeping a loan under a tenth of what's available.${thinNote(p)}` : "."}`);
   // 5 close
   const back = p.collateral.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" + ");
   out.push(`5  Close: repay ${p.debt.map((d) => `${amt(d.amount)} ${d.symbol}`).join(" + ")} and ${back} comes back.`);
@@ -376,10 +376,19 @@ function rateBase(p) {
   const vals = [chain, feed].filter((x) => x != null);
   return { chain, feed, hi: vals.length ? Math.max(...vals) : null, agree: vals.length < 2 || Math.abs(chain - feed) * 100 <= T.rateAgreeBps };
 }
-function bestAlternative(p, offers) {
+// best: the cheapest venue under what you pay with LTV room and depth for the loan, by the rule market.mjs --size uses
+// (the loan under 10% of what's available, lib/rules.mjs). thin: a venue cheaper still that fails only on depth; it is named, never offered.
+function alternatives(p, offers) {
   const need = p.pair?.partial ? p.pair.debt.usd : p.debtUsd; const b = rateBase(p);
-  const c = offers.filter((o) => o.apr != null && o !== p.mine && (o.liquidityUsd ?? 0) >= need && (o.maxLtv == null || p.ltv == null || o.maxLtv >= p.ltv * 100)).sort((a, b) => a.apr - b.apr);
-  return c.length && b.hi != null && c[0].apr < b.hi ? c[0] : null;
+  const c = b.hi == null ? [] : offers.filter((o) => o.apr != null && o !== p.mine && o.apr < b.hi && (o.maxLtv == null || p.ltv == null || o.maxLtv >= p.ltv * 100)).sort((a, b) => a.apr - b.apr);
+  const best = c.find((o) => fitsDepth(need, o.liquidityUsd)) || null;
+  const thins = c.filter((o) => o.liquidityUsd && !fitsDepth(need, o.liquidityUsd) && (!best || o.apr < best.apr));
+  return { best, thin: thins.find((o) => need <= o.liquidityUsd) || thins[0] || null }; // one that could at least fund it is named first
+}
+function thinNote(p) {
+  const t = p.thin; const part = p.pair?.partial ? p.pair.debt.usd : p.debtUsd; if (!t || !part) return "";
+  const share = (part / t.liquidityUsd) * 100;
+  return ` ${cap(offerShort(t, p))} is cheaper at ${pct(t.apr)}, but ${share > 100 ? `it only has ${usdShort(t.liquidityUsd)} available` : `${p.pair?.partial ? "that part" : "your loan"} would be ${share.toFixed(0)}% of its ${usdShort(t.liquidityUsd)} available, so expect to move the rate`}.`;
 }
 // The saving, or null when there is none. When the two readings agree, it's priced off the chain rate (the table's number).
 // When they disagree: cheaper than both → the smaller saving, flagged range; cheaper than one only → uncertain, no saving claimed.
@@ -459,7 +468,7 @@ function offerShort(v, p) {
   return venueName(typeof v === "string" ? v : v, p?.market?.offers);
 }
 function venueShort(p) { if (p.protocol === "morpho-blue") return "Morpho"; if (p.protocol === "compound-v3") return "Compound"; if (p.protocol === "fluid") return "Fluid"; return p.venue.replace(" v3", "").replace(" · Main", ""); }
-function strip(p) { const { market, supplied, ...rest } = p; return { ...rest, mine: p.mine ? { venue: p.mine.venue, apr: p.mine.apr, maxLtv: p.mine.maxLtv, recLtv: p.mine.recLtv, liquidityUsd: p.mine.liquidityUsd, stability: p.mine.stability } : null, best: p.best ? { venue: p.best.venue, apr: p.best.apr, maxLtv: p.best.maxLtv, liquidityUsd: p.best.liquidityUsd } : null }; }
+function strip(p) { const { market, supplied, ...rest } = p; return { ...rest, mine: p.mine ? { venue: p.mine.venue, apr: p.mine.apr, maxLtv: p.mine.maxLtv, recLtv: p.mine.recLtv, liquidityUsd: p.mine.liquidityUsd, stability: p.mine.stability } : null, best: p.best ? { venue: p.best.venue, apr: p.best.apr, maxLtv: p.best.maxLtv, liquidityUsd: p.best.liquidityUsd } : null, thin: p.thin ? { venue: p.thin.venue, apr: p.thin.apr, maxLtv: p.thin.maxLtv, liquidityUsd: p.thin.liquidityUsd } : null }; }
 function when(iso) { if (!iso) return "last time"; const d = new Date(iso), now = new Date(); const days = (now - d) / 86400000; if (days < 1 && now.getDate() === d.getDate()) return "earlier today"; if (days < 2 && now.getDate() - d.getDate() === 1) return "yesterday"; if (days < 7) return d.toLocaleDateString("en-US", { weekday: "long" }); return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
 function chainName(id) { return { 1: "Ethereum", 8453: "Base", 42161: "Arbitrum" }[id] || `chain ${id}`; }
 function short(a) { return a.slice(0, 6) + "…" + a.slice(-4); }

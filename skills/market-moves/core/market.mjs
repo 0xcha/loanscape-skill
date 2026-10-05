@@ -10,12 +10,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fetchOffers, deepLink, loadMem, saveMem, pairLinkOnce, venueName } from "./lib/offers.mjs";
-import { bps, fmtPerM, dollarsPerYear, trustedHistory } from "./lib/rules.mjs";
+import { bps, fmtPerM, dollarsPerYear, trustedHistory, DEPTH_SHARE, fitsDepth } from "./lib/rules.mjs";
 import { mdTable, sparkline, depthBar, shareBar } from "./lib/table.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const T = JSON.parse(readFileSync(join(HERE, "tokens.json"), "utf8"));
-const DEPTH_SHARE = 0.10, OFFER_AFTER = 1, ASKED_MIN_MS = 3600 * 1000;
+const OFFER_AFTER = 1, ASKED_MIN_MS = 3600 * 1000;
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.coll || !args.borrow) { console.error("usage: node market.mjs --coll ETH --borrow USDC [--chain ethereum|base|arbitrum] [--size 500000] [--venues aave,morpho] [--rank rate|ltv|liquidity|stability] [--table] [--json]"); process.exit(2); }
@@ -126,8 +126,8 @@ function contrasts(top, offers) {
 // At a given size: who can take it, who is cheapest among them, where the crossover sits.
 function sized(pair, offers, link) {
   const byRate = bestPerProtocol(sortBy(offers, "rate"));
-  const fits = byRate.filter((o) => o.liquidityUsd && size <= o.liquidityUsd * DEPTH_SHARE);
-  const stretch = byRate.filter((o) => o.liquidityUsd && size > o.liquidityUsd * DEPTH_SHARE && size <= o.liquidityUsd);
+  const fits = byRate.filter((o) => fitsDepth(size, o.liquidityUsd));
+  const stretch = byRate.filter((o) => o.liquidityUsd && !fitsDepth(size, o.liquidityUsd) && size <= o.liquidityUsd);
   const L = [];
   if (!fits.length && !stretch.length) { L.push(`${pair} on ${chainName(chainId)}: nothing has ${usdShort(size)} available on this pair right now. Deepest is ${short(byRate.sort((a, b) => b.liquidityUsd - a.liquidityUsd)[0])} at ${usdShort(byRate[0].liquidityUsd)}.`); if (link) L.push(link); return paragraphs(L); }
   const best = fits[0] || stretch[0];

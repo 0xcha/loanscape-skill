@@ -41,7 +41,7 @@ The app also ranks by "max health" (liquidation headroom); the market script doe
 
 ## Sizing rule
 
-`market.mjs --size` treats a venue as able to take a loan when the loan is under 10% of its available depth; between 10% and 100% it warns that the rate will move; above 100% the venue can't fund it. The crossover in "Under about $X, A. Above, B." is 10% of the cheaper venue's depth. A rule of thumb, stated as one.
+`market.mjs --size` treats a venue as able to take a loan when the loan is under 10% of its available depth; between 10% and 100% it warns that the rate will move; above 100% the venue can't fund it. The crossover in "Under about $X, A. Above, B." is 10% of the cheaper venue's depth. A rule of thumb, stated as one. The wallet brief (its refinance line and the move ladder) and `cost.mjs` (loan cost and refinance check, when sized) pick venues by the same rule, from `lib/rules.mjs`.
 
 ## What the skill must not do
 
