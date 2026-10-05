@@ -1,0 +1,63 @@
+---
+name: loan-cost
+description: What an onchain loan costs a year at a given size, and net of the collateral's own yield: the carry on a loop like wstETH against WETH. Use for how much $X against Y would cost, the true or net cost of borrowing against a yielding asset, whether a loop or carry trade pays, or the spread between staking yield and the borrow rate. Not for where's cheapest (borrow-rates) or the user's own loan (/loanscape).
+allowed-tools: Bash(node *)
+metadata:
+  author: Lotus Labs
+  homepage: https://loanscape.lotuslabs.net
+  version: "0.2.23"
+---
+
+# Loan cost: what it really costs
+
+One script nets collateral yield and rewards against the borrow rate for every deep venue on a pair, and prints finished text. Pick the flags from the question, run it, pass the text through.
+
+Read `core/voice.md` once. It governs every line you add.
+
+## Typed alone
+
+`/loan-cost` with nothing after it runs the pair where "what does it really cost" has a non-trivial answer, and lets the card show what the skill does:
+
+```bash
+node "$CORE/cost.mjs" --coll wstETH --borrow WETH --bare
+```
+
+`--bare` adds one last line naming the free-text form. Print it as returned; add nothing.
+
+```bash
+node "$CORE/cost.mjs" --coll <collateral> --borrow <asset> [--size 500k] [--ltv 60] [--chain ethereum|base|arbitrum]
+```
+
+The scripts are in `${CLAUDE_PLUGIN_ROOT}/core` in a Claude Code plugin install (that variable is already substituted in this text), and in the `core` folder beside this SKILL.md anywhere else (Codex, Cursor and other agents). `$CORE` in the commands below stands for that folder: write the path out in the command itself; don't set a shell variable first, since a `CORE=…;` prefix doesn't match the allowed `node` command. Every command below runs from that folder. Ignore any `failed to copy trust settings` lines on stderr.
+
+| The user asks | Flags | They get |
+|---|---|---|
+| "does the wstETH/ETH loop pay?", "what's the carry on wstETH?" | `--coll wstETH --borrow WETH` | the carry: yield minus borrow rate per unit borrowed, per venue, with the leverage the max LTV allows |
+| "what does it really cost to borrow dollars against wstETH?" | `--coll wstETH --borrow USDC --ltv 60` | net cost at that LTV: the yield offsets part of the rate; the offset shrinks as LTV rises. Default LTV is 50% if they gave none; say so only if asked |
+| a size | add `--size 1m` | dollars a year, and the venue pick respects the 10%-of-depth rule; a better venue that's too thin is named as such |
+| collateral that doesn't yield (ETH, WBTC, cbBTC) | same flags | "costs what it says", the table, dollars a year if sized. LTV changes nothing here except the liquidation price; pass it anyway and the script says so |
+| one venue named ("at Spark", "if I moved it to Morpho") | add `--venues spark` | the same card for that venue only |
+
+Collateral: ETH, wstETH, cbBTC, WBTC. Borrow: USDC, USDT, DAI, WETH. Only pass `--chain` when the user named one.
+
+## Render
+
+No preamble. The first thing you print is the script's text; never announce that you're reading a guide or running a script.
+
+Print the script's text exactly as returned. The table is markdown; print it as-is, never inside a code fence. The script adds the Loanscape link once per pair per conversation; never add one yourself.
+
+If the run doesn't fit the question (wrong LTV, size dropped), run again before answering.
+
+## Follow-ups, five lines or fewer
+
+- "What if rates flip?": run `market-moves` on the pair (`moves.mjs --pair wstETH/WETH`) and show its table, then two lines: a flip is the borrow rate rising over the yield or the yield falling under it, and at that point the loop costs the gap on every unit of exposure. Name the venue in the table that is already negative, if one is.
+- "Is that leverage safe?": the loop multiplies both the spread and the liquidation risk; give the max LTV, the exposure multiple the script printed, and that a rate flip turns the carry negative. No recommendation.
+- "Which venue then?": tradeoffs on carry, depth and LTV from the table, then hand it back.
+- "What about at 70% LTV?": run again with `--ltv 70`.
+- The user's own position: `/loanscape`.
+
+## Rules
+
+- Carry is `collateral yield + rewards − borrow rate`, per unit borrowed. Net cost against stable debt at LTV L is `borrow rate − rewards − yield / L`. Both are the script's arithmetic; never redo it in your head.
+- Both legs float. Every carry answer says so once.
+- Describe, don't advise. No direction calls on yields or rates.
