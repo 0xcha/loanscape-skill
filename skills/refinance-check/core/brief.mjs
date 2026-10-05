@@ -182,7 +182,8 @@ function render() {
     return L.join("\n");
   }
   if (!n) {
-    if (status === "partial") { L.push(`No open borrow positions for ${who} in the venues that answered.`); L.push(unread + " Say retry and I'll read them again."); return L.join("\n"); }
+    // The unread venues lead, as on every partial read; the scoped verdict follows, then the next move.
+    if (status === "partial") { if (unread) { L.push(unread); L.push(""); } L.push(`No open borrow positions for ${who} in the venues that answered. Say retry and I'll read them again.`); return L.join("\n"); }
     L.push(`No open borrow positions for ${who}.`);
     if (firstRun) L.push(`I read Aave, Spark, Morpho, Compound and Fluid on ${listJoin(pos.chains.map(chainName))}.`);
     return L.join("\n");
@@ -396,7 +397,7 @@ function refiQuote(p) {
 function firstReason(t) { const lines = t.split("\n").map((l) => l.trim()).filter(Boolean); return lines.find((l) => /^\w*Error:.*(ENS name|not an address)/.test(l)) || lines.find((l) => /^\w*Error:/.test(l)) || lines[0] || t; }
 function reason() {
   const e = pos.errors.map((x) => x.error || "").join(" ");
-  return /429|rate.?limit|too many|capacity/i.test(e) ? " (the public endpoints were rate-limiting)" : /timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|fetch failed|Could not resolve/i.test(e) ? " (the network didn't reach them)" : "";
+  return /429|rate.?limit|too many|capacity/i.test(e) ? " (the public endpoints were rate-limiting)" : /timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|fetch failed|Could not resolve|Failed to connect|Could not connect/i.test(e) ? " (the network didn't reach them)" : "";
 }
 function computeDiff(prev, pos, unread = () => false) {
   const lines = []; const before = prev.snapshot || {};

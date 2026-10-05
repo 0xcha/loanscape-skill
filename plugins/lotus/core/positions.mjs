@@ -161,7 +161,8 @@ function liquidationPriceFor(p) {
 function printText(o) {
   const src = o.resolvedFrom ? `${o.resolvedFrom} → ${o.wallet}` : o.wallet;
   if (o.status === "failed") { console.log(`Could not check ${src}: every venue read failed.`); printErrors(o.errors); return; }
-  if (!o.positions.length) { console.log(`No open borrow positions for ${src} on ${o.chains.map(chainName).join(", ")}${o.status === "partial" ? " in the venues that answered" : ""}.`); printErrors(o.errors); if (o.status === "ok") console.log(o.coverage); return; }
+  printErrors(o.errors); // what couldn't be read comes before anything said about what could
+  if (!o.positions.length) { console.log(`No open borrow positions for ${src} on ${o.chains.map(chainName).join(", ")}${o.status === "partial" ? " in the venues that answered" : ""}.`); if (o.status === "ok") console.log(o.coverage); return; }
   console.log(`${o.positions.length} open borrow position${o.positions.length === 1 ? "" : "s"} for ${src} · ${o.fetchedAt}`);
   o.positions.forEach((p, i) => {
     const coll = p.collateral.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" + ") || "no collateral";
@@ -176,7 +177,7 @@ function printText(o) {
   });
   const totalDebt = o.positions.reduce((s, p) => s + (p.debtUsd || 0), 0), totalColl = o.positions.reduce((s, p) => s + (p.collateralUsd || 0), 0);
   console.log(`total: ${usd(totalDebt)} borrowed against ${usd(totalColl)}`);
-  printErrors(o.errors); if (o.status === "ok") console.log(o.coverage);
+  if (o.status === "ok") console.log(o.coverage);
 }
 function printErrors(errs) { for (const e of errs) console.log(`could not read ${e.venue} on ${chainName(e.chainId)}: ${e.error}`); }
 function coverageLine(chains) {

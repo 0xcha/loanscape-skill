@@ -87,7 +87,7 @@ If `update` still says it's at the latest version, `claude plugin uninstall lotu
 
 ## Telemetry
 
-Requests carry `User-Agent: loanscape-skill/<version>` and `X-Loanscape-Client: claude-skill`; links carry `?src=claude-skill`. That is what lets Lotus report agent-routed queries as their own line, separate from browser users. Your saved memory (remembered wallets and the last snapshot) stays on your machine. To read a wallet, its public address is sent to public RPC providers (publicnode, dRPC, Ankr and others) and to Morpho's API; the Loanscape API only ever receives the pair being priced, never the wallet. Reading a wallet needs no keys and no signature.
+Requests carry `User-Agent: loanscape-skill/<version>` and `X-Loanscape-Client: claude-skill`; links carry `?src=claude-skill`. That is what lets Lotus report agent-routed queries as their own line, separate from browser users. Your saved memory (remembered wallets and the last snapshot) stays on your machine. To read a wallet, its public address is sent to public RPC providers (POKT/Nodies, Blast, publicnode, MEV Blocker, dRPC and the chains' own endpoints; set `LOANSCAPE_RPC_<chainId>` to use your own instead) and to Morpho's API; the Loanscape API only ever receives the pair being priced, never the wallet. Reading a wallet needs no keys and no signature.
 
 ## core/positions.mjs (added 2026-09-22; now at plugins/lotus/core/)
 
@@ -102,4 +102,4 @@ One normalised shape per position: venue, kind (pooled or isolated), collateral[
 
 Reads Fluid too (added 2026-09-22): positions are NFTs, listed and decoded through Fluid's VaultResolver, priced from Fluid's public API. Type-1 vaults (token collateral, token debt) are fully priced; smart-collateral or smart-debt vaults report the DEX-share side unpriced and say so. Aave rows now split deposits into collateral (enabled, backing the loan) and `supplied` (not backing it), carry per-asset liquidation thresholds, and name the e-mode category. The liquidation price is solved for the largest collateral asset holding other prices fixed; when stable collateral backs one volatile debt it reports the price the debt would have to rise to instead.
 
-Known limits: Fluid smart-vault shares are not converted to USD. Public RPCs rate-limit; a three-chain run takes five to ten seconds.
+Known limits: Fluid smart-vault shares are not converted to USD. Public RPCs rate-limit and cap batch sizes; `lib/rpc.mjs` splits batches to each endpoint's limit, falls back to one-by-one calls, backs off and rotates on 429/5xx, so a read slows down rather than failing. A three-chain run takes one to five seconds.
