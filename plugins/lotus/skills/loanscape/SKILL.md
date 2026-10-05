@@ -51,8 +51,8 @@ Each position there carries `mine` (the user's own venue as the market sees it),
 node "$CORE/brief.mjs" --ladder <row number> --shock <percent>
 ```
 
-  Pass `--shock` with the move the user named (20 for "drops 20%") and the first line answers that move directly; omit it for the plain ladder. It prints LTV and health at −10 / −20 / −30% on the main collateral (or +10 / +20 / +30% on the borrowed asset when the risk runs that way), the liquidation price, and the borrowing room under the venue's working ceiling or the collateral to add / debt to repay to get back under it.
-- "Should I move it?", "what are my options?", "what should I do?": run the move ladder for that row and print it as returned. It lays out the five moves from leaving the loan alone to closing it (do nothing, add collateral, repay some, refinance, close) with the numbers for each, and hands the decision back. Refinance is step four on purpose. Gas is described, never quantified; the run has no gas figure and you do not invent one.
+  Pass `--shock` with the move the user named (20 for "drops 20%") and the first line answers that move directly; omit it for the plain ladder. It prints LTV and health at −10 / −20 / −30% on the main collateral (or +10 / +20 / +30% on the borrowed asset when the risk runs that way), the liquidation price, and the borrowing room under the venue's working ceiling or the collateral to add / debt to repay to get back under it. A loop (liquid-staking collateral against the asset it stakes, wstETH → WETH) reads differently, and the script handles it: an ETH move shifts both sides, so `--shock` says the loan doesn't move on ETH and gives the same number as a fall in the ratio; the rows are the ratio −1 / −2 / −3%, then the carry and the unwind that doubles the ratio room.
+- "Should I move it?", "what are my options?", "what should I do?": run the move ladder for that row and print it as returned. It lays out the five moves from leaving the loan alone to closing it (do nothing, add collateral, repay some, refinance, close) with the numbers for each, and hands the decision back. Refinance is step four on purpose. A loop gets four moves instead: do nothing (with its carry and ratio room), lever down, refinance, close; adding collateral isn't a lever there. Gas is described, never quantified; the run has no gas figure and you do not invent one.
 
 ```bash
 node "$CORE/brief.mjs" --move <row number>
@@ -73,7 +73,7 @@ node "$CORE/brief.mjs" --move <row number>
 ## What the script decides, so you don't re-decide it
 
 - **Urgent** (leads the brief): liquidation within a 15% price move, health under 1.15, or a rate that stepped 100 bps or more since the last run.
-- **Worth knowing** (at most two lines): a cheaper venue on the same pair by 20 bps or $100 a year, with LTV room and the loan under 10% of its available depth; the rate rising three days running; LTV above the venue's working ceiling.
+- **Worth knowing** (at most two lines): a cheaper venue on the same pair by at least 20 bps and $100 a year, with LTV room and the loan under 10% of its available depth; the rate rising three days running; LTV above the venue's working ceiling (not for loops, which run near their liquidation LTV by design).
 - **Quiet**: everything else, never printed.
 - **Since last time**: collateral price moves of 2% or more, headroom changes of 2 points, rate changes of 10 bps, debt changes of 1%, new or closed positions. Three lines at most.
 

@@ -14,6 +14,7 @@ Both sessions test the same way. Wallets are public addresses whose positions ch
 | `0x196a5888d5603a4363cfaf9d75abf1bc961cd37d` | Fluid type-1 plus a smart-collateral vault (share side unpriced) |
 | `0x761e0f091b68b6120191eb0b04f43867b94d66c7` | Aave e-mode on two instances plus a Fluid smart-collateral-and-debt vault |
 | `0x0774b5B15B0CEe5E2e14814CCF4d4611fF78CcF5` | Morpho on a pair Loanscape does not cover (no market context, no refi) |
+| `0x462a336dCac6eaF544106266914caa5a18b831d0` | wstETH/WETH and weETH/WETH loops on Aave e-mode, Spark and Morpho at 90–94% LTV (found 2026-10-05 via Morpho's API; Crews's IPOR Fusion repro was 0xb8a4…715e) |
 | `vitalik.eth` | ENS resolve, no positions |
 
 Run with a throwaway memory: `LOANSCAPE_HOME=$TMPDIR/ls node core/brief.mjs --wallet <w> --chain ethereum`. Ignore `failed to copy trust settings` on stderr.
@@ -49,3 +50,5 @@ The brief has three states and each must read differently: checked and quiet, pa
 ## Morning routine (after any change to install-routine.sh)
 
 Never test against your real crontab. Put a fake `crontab` first on `PATH` that keeps its table in a temp file (`-l` prints it or says "no crontab for …" and exits 1; `-` writes stdin to it), and point `HOME` and `LOANSCAPE_HOME` at a temp dir. Seed the table with unrelated jobs, including ones that mention `morning.sh`. Run under `/bin/sh` (dash on Debian and Ubuntu) as well as bash. Then check: an install adds exactly one line ending in `# loanscape-morning-brief` and leaves every other line identical; a second identical install writes nothing; `--remove` gives back the original table exactly; `--dry-run` and `--remove --dry-run` call no `crontab -` and create no files; a backup in `$LOANSCAPE_HOME` matches the table from before each change; a crontab that can't be read is never overwritten. For macOS, a fake `uname` that prints `Darwin`, a no-op `launchctl` and `LAUNCH_AGENTS_DIR` set to a temp dir exercise the launchd path.
+- **Loops:** `0x462a336d…831d0`. The liquidation cell reads `wstETH/WETH −x%`, never a USD price; the urgent row's follow-up asks about levering down; no "above the working ceiling" line. `--move` has four steps (do nothing with carry and ratio room, lever down with the unwind that doubles the room and the carry it gives up, refinance, close) and never says add collateral. `--ladder` steps the ratio −1/−2/−3%, and `--shock 20` says an ETH move leaves LTV and health where they are.
+- **Refinance bar:** a cheaper venue is worth a line only at 20 bps **and** $100 a year. On the loop wallet above, Aave e-mode 5 bps under a $24M Morpho loan (~$12k a year) must not print; `--move` says it misses the 20 bps bar and names only that bar.

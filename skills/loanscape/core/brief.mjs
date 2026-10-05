@@ -91,7 +91,8 @@ for (const p of pos.positions) {
   const healthUrgent = p.tier === "volatile" && p.healthFactor != null && p.healthFactor < T.urgentHealth; // stable loops run at 1.01–1.03 by design
   if ((dist != null && dist <= limit) || healthUrgent) {
     const verb = p.tier === "stable" ? "depegs" : "drops";
-    const txt = L?.direction === "up" && dist != null ? `${name} liquidates if ${L.symbol} rises ${dist.toFixed(0)}%, to ${usd(L.price)}.`
+    const txt = isLoop(p) && dist != null ? `${name} liquidates if the ${ratioName(p)} ratio falls ${pc1(dist)}.`
+      : L?.direction === "up" && dist != null ? `${name} liquidates if ${L.symbol} rises ${dist.toFixed(0)}%, to ${usd(L.price)}.`
       : dist != null ? `${name} liquidates if ${L.symbol} ${verb} ${dist.toFixed(0)}%, to ${usd(L.price)}.` : `${name} is close to liquidation.`;
     findings.push({ tier: "urgent", kind: "liq", key: p.key, inRow: !!L?.price, text: `${txt} Health ${fmtHf(p.healthFactor)}.` });
   }
@@ -100,7 +101,7 @@ for (const p of pos.positions) {
     findings.push({ tier: "urgent", kind: "step", key: p.key, text: `${name} rate stepped from ${pct(before.apr)} to ${pct(p.borrowApr)} since ${when(prevFor(p).lastRun)}.` });
   }
   const q = refiQuote(p);
-  if (q && !q.uncertain && (q.bps >= T.refiMinBps || q.perYear >= T.refiMinUsdPerYear)) {
+  if (q && !q.uncertain && q.bps >= T.refiMinBps && q.perYear >= T.refiMinUsdPerYear) { // both bars: 20 bps on dust isn't worth a line, nor $100 a year on 2 bps of a large loan
     const what = p.pair.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part of the ${venueShort(p)} position` : `the ${loanName(p)} loan`;
     const text = q.range ? `${cap(offerShort(p.best, p))} would charge ${pct(p.best.apr)} on ${what}: at least ${q.bps} bps and ${usd(q.perYear)} a year less than you pay now, with ${usdShort(p.best.liquidityUsd)} available there.`
       : `${cap(offerShort(p.best, p))} would charge ${pct(p.best.apr)} on ${what}: about ${usd(q.newCost)} a year instead of ${usd(q.nowCost)}, ${q.bps} bps less, with ${usdShort(p.best.liquidityUsd)} available there.`;
@@ -116,7 +117,7 @@ for (const p of pos.positions) {
     const idle = p.supplied.filter((c) => c.usd >= T.idleMinUsd).sort((a, b) => b.usd - a.usd);
     if (idle.length) findings.push({ tier: "worth", key: p.key, kind: "idle", value: idle.reduce((s, c) => s + c.usd, 0) / 100, text: `${idle.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" and ")} on ${venueShort(p)} ${idle.length === 1 ? "isn't" : "aren't"} enabled as collateral, so ${idle.length === 1 ? "it adds" : "they add"} no headroom to the loan.` });
   }
-  if (p.mine?.recLtv != null && p.ltv != null && p.ltv * 100 > p.mine.recLtv) {
+  if (p.mine?.recLtv != null && p.ltv != null && p.ltv * 100 > p.mine.recLtv && !isLoop(p)) { // a loop isn't held to the pair's generic ceiling
     const stable = p.tier !== "volatile"; // stable and LST loops both run near their ceiling by design
     findings.push({ tier: "worth", key: p.key, kind: "ltv", name, venue: venueShort(p), pair: p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}` : null, stable, ltvPct: Math.round(p.ltv * 100), ceil: p.mine.recLtv,
       text: stable ? `${cap(name)} sits at ${(p.ltv * 100).toFixed(0)}% LTV, which is how these markets run; the working ceiling Loanscape gives it is ${p.mine.recLtv}%.` : `${cap(name)} sits at ${(p.ltv * 100).toFixed(0)}% LTV, above the ${p.mine.recLtv}% Loanscape treats as the working ceiling there.` });
@@ -222,7 +223,8 @@ function render() {
   if (newWorth.length === 1) detail.push(`One thing worth knowing: ${newWorth[0].text}`);
   else newWorth.forEach((w) => detail.push(`Worth knowing: ${w.text}`));
   for (const w of newWorth) if (w.kind === "refi" && w.linkLine) detail.push(w.linkLine);
-  if (urgent.some((u) => u.kind === "liq")) detail.push("Want the numbers on adding collateral or paying some down?");
+  const liqs = urgent.filter((u) => u.kind === "liq");
+  if (liqs.length) detail.push(liqs.every((u) => isLoop(pos.positions.find((p) => p.key === u.key))) ? "Want the numbers on levering down?" : "Want the numbers on adding collateral or paying some down?");
   if (noRates.length) detail.push(`Loanscape's rates didn't load for ${listJoin(noRates)}, so there's no rate or refinance check on ${noRates.length === 1 ? "it" : "them"} this time.`);
   if (detail.length) { L.push(""); L.push(...detail); }
   if (firstRun) { L.push(""); L.push(`${firstEver ? `${status === "ok" ? "Checked Aave, Spark, Morpho, Compound and Fluid" : "Checked the other venues"} on ${listJoin(pos.chains.map(chainName))}. ` : ""}${saved ? "Wallet saved." : "Couldn't save this wallet here, so paste it again next time."}`); if (saved && firstEver) L.push(`Run /loanscape any morning for what's changed.`); }
@@ -235,7 +237,8 @@ function table(urgentKeys) {
     const side = (list, total) => list.length <= 1 ? list.map((c) => `${amt(c.amount)} ${c.symbol}`).join("") || "none" : `${list.map((c) => c.symbol).join(" + ")} (${usd(total)})`;
     const L = p.liquidationPrice;
     const pc = (x) => (x < 1 ? x.toFixed(1) : x.toFixed(0)) + "%";
-    const liq = L?.price && L.direction === "up" ? `${L.symbol} up to ${usd(L.price)} (+${pc(L.risePct)})`
+    const liq = isLoop(p) && L?.price ? `${ratioName(p)} −${pc1(L.dropPct)}`
+      : L?.price && L.direction === "up" ? `${L.symbol} up to ${usd(L.price)} (+${pc(L.risePct)})`
       : L?.price ? `${usd(L.price)} ${L.symbol} (−${pc(L.dropPct)})`
       : L?.note && /other collateral/.test(L.note) ? "covered by other collateral"
       : p.note ? "unpriced" : "n/a";
@@ -271,6 +274,7 @@ function ladder(n) {
   const L = p.liquidationPrice; const up = L?.direction === "up";
   const colls = p.collateral.filter((c) => c.usd != null); const lt = (c) => c.liquidationThreshold ?? p.liquidationThreshold;
   if (!colls.length || !p.debtUsd || colls.some((c) => !lt(c))) return `${cap(label(p))}: ${p.note || "not enough priced data for a ladder."}`;
+  if (isLoop(p) && L?.price) return loopLadder(p);
   const main = colls.reduce((a, b) => (b.usd > a.usd ? b : a)); const others = colls.filter((c) => c !== main);
   const debtMain = up ? p.debt.filter((d) => d.usd != null).sort((a, b) => b.usd - a.usd)[0] : null;
   const at = (shock) => { // shock as a fraction: −0.10 on collateral, or +0.10 on the borrowed asset
@@ -311,6 +315,7 @@ function moveLadder(n) {
   const p = pos.positions[n - 1];
   if (!p) return `No position ${n}. The brief numbers them 1 to ${pos.positions.length}.`;
   if (!p.debtUsd || p.collateralUsd == null || !p.liquidationThreshold) return `${cap(label(p))}: ${p.note || "not enough priced data to lay out the moves."}`;
+  if (isLoop(p) && p.liquidationPrice?.price) return loopMoves(p);
   const L = p.liquidationPrice; const up = L?.direction === "up"; const dist = up ? L?.risePct : L?.dropPct;
   const lt = p.liquidationThreshold; const ceil = p.mine?.recLtv != null ? p.mine.recLtv / 100 : null;
   const yearly = p.borrowApr != null ? (p.debtUsd * p.borrowApr) / 100 : null;
@@ -337,12 +342,21 @@ function moveLadder(n) {
     out.push(`2  Add collateral: not needed for headroom; liquidation is already ${dist != null ? `a ${dist.toFixed(0)}% ${up ? "rise" : "drop"} away` : "far off"}.`);
     out.push(`3  Repay some: same; it only lowers the bill in proportion.`);
   }
-  // 4 refinance
+  out.push(refiStep(p));
+  // 5 close
+  const back = p.collateral.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" + ");
+  out.push(`5  Close: repay ${p.debt.map((d) => `${amt(d.amount)} ${d.symbol}`).join(" + ")} and ${back} comes back.`);
+  out.push("Your call.");
+  return out.join("\n");
+}
+
+// Step 4 of the moves: refinance, or why not.
+function refiStep(p) {
   const q = refiQuote(p);
   if (q?.uncertain) {
-    out.push(`4  Refinance: can't call it today. The chain shows ${p.pair?.partial ? "this part" : "this loan"} at ${pct(q.chain)}; Loanscape's feed has the same market at ${pct(q.feed)}. ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} is cheaper than one reading and not the other, so there's no saving to claim until they agree.`);
-  } else if (q && q.bps < T.refiMinBps && q.perYear < T.refiMinUsdPerYear) {
-    out.push(`4  Refinance: nothing worth a move today. The cheapest alternative with room, ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)}, is ${q.bps} bps less, about ${usd(q.perYear)} a year, under the $${T.refiMinUsdPerYear} a year the brief treats as worth mentioning.`);
+    return (`4  Refinance: can't call it today. The chain shows ${p.pair?.partial ? "this part" : "this loan"} at ${pct(q.chain)}; Loanscape's feed has the same market at ${pct(q.feed)}. ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} is cheaper than one reading and not the other, so there's no saving to claim until they agree.`);
+  } else if (q && (q.bps < T.refiMinBps || q.perYear < T.refiMinUsdPerYear)) {
+    return (`4  Refinance: nothing worth a move today. The cheapest alternative with room, ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)}, is ${q.bps} bps less, about ${usd(q.perYear)} a year, under the ${[q.bps < T.refiMinBps ? `${T.refiMinBps} bps` : null, q.perYear < T.refiMinUsdPerYear ? `$${T.refiMinUsdPerYear} a year` : null].filter(Boolean).join(" and ")} the brief treats as worth mentioning.`);
   } else if (q) {
     const partUsd = q.partUsd;
     const sharePct = p.best.liquidityUsd ? (partUsd / p.best.liquidityUsd) * 100 : null;
@@ -350,11 +364,70 @@ function moveLadder(n) {
     const fit = p.best.maxLtv != null && p.ltv != null ? `, max LTV ${p.best.maxLtv}% against your ${(p.ltv * 100).toFixed(0)}%` : "";
     const what = p.pair?.partial ? `the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part` : "it";
     const saving = q.range ? `would save at least ${q.bps} bps and ${usd(q.perYear)} a year on ${what} (the chain and Loanscape's feed read your rate ${pct(q.chain)} and ${pct(q.feed)}; the smaller saving is the one quoted)` : `would make ${what} ${usd(q.newCost)} a year instead of ${usd(q.nowCost)}, ${q.bps} bps less`;
-    out.push(`4  Refinance: ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} ${saving}; ${usdShort(p.best.liquidityUsd)} available there${share}${fit}.${thinNote(p)} Repay here, reborrow there, two or three transactions with gas on each.`);
-  } else out.push(`4  Refinance: no venue is cheaper on ${p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}${p.pair.partial ? ", the largest part of this position," : ""}` : "this pair"} with enough depth for your size today${p.thin ? `, keeping a loan under a tenth of what's available.${thinNote(p)}` : "."}`);
-  // 5 close
-  const back = p.collateral.map((c) => `${amt(c.amount)} ${c.symbol}`).join(" + ");
-  out.push(`5  Close: repay ${p.debt.map((d) => `${amt(d.amount)} ${d.symbol}`).join(" + ")} and ${back} comes back.`);
+    return (`4  Refinance: ${cap(offerShort(p.best, p))} at ${pct(p.best.apr)} ${saving}; ${usdShort(p.best.liquidityUsd)} available there${share}${fit}.${thinNote(p)} Repay here, reborrow there, two or three transactions with gas on each.`);
+  } else return (`4  Refinance: no venue is cheaper on ${p.pair ? `${p.pair.coll.symbol} → ${p.pair.debt.symbol}${p.pair.partial ? ", the largest part of this position," : ""}` : "this pair"} with enough depth for your size today${p.thin ? `, keeping a loan under a tenth of what's available.${thinNote(p)}` : "."}`);
+}
+
+// ---------------- loops ----------------
+// A loop is liquid-staking collateral against the asset it stakes (wstETH → WETH). ETH's price moves both sides together, so a USD
+// drop says nothing about it: what liquidates it is the ratio between the two (a depeg, or the oracle's exchange rate), and what it
+// earns is the carry, the staking yield on the collateral against the borrow rate. Adding collateral is not the lever: unwinding is
+// (withdraw some collateral, swap it, repay). The working ceiling Loanscape gives the pair is a generic one, so loops are not held to it.
+function isLoop(p) { return p?.tier === "lst" && p.liquidationPrice?.direction !== "up"; }
+function ratioName(p) { const d = p.debt.filter((x) => x.usd != null).sort((a, b) => b.usd - a.usd)[0]; return `${p.liquidationPrice?.symbol || p.collateral[0]?.symbol}/${d?.symbol || "ETH"}`; }
+function pc1(x) { return (x < 10 ? x.toFixed(1) : x.toFixed(0)) + "%"; }
+// The yield is the collateral's own (the API's, for the pair's collateral); on a position holding more than the pair it covers that part.
+function loopCarry(p) {
+  const y = p.market?.coll?.yieldApr; const apr = rateBase(p).chain;
+  if (y == null || apr == null || !p.pair) return null;
+  const collUsd = p.pair.coll.usd, debtUsd = p.pair.partial ? p.pair.debt.usd : p.debtUsd;
+  return { y: Number(y), apr, net: (collUsd * y - debtUsd * apr) / 100, spreadBps: Math.round((y - apr) * 100), part: p.pair.partial };
+}
+function carryText(p, c) {
+  const what = c.part ? ` on the ${p.pair.coll.symbol} → ${p.pair.debt.symbol} part` : "";
+  return `${p.pair.coll.symbol} earns ${pct(c.y)} against ${pct(c.apr)} to borrow, about ${usd(Math.abs(c.net))} a year ${c.net >= 0 ? "net" : "net against you"}${what}`;
+}
+// Unwind to a target ratio room: sell R (USD) of the main collateral and repay R of debt. Liquidation when Σ coll × LT = debt, with the
+// main collateral's ratio down by `room`: D − R = others + (M − R)(1 − room)LT → R = (D − others − M(1 − room)LT) / (1 − (1 − room)LT).
+function unwindFor(p, room) {
+  const lt = (c) => c.liquidationThreshold ?? p.liquidationThreshold;
+  const colls = p.collateral.filter((c) => c.usd != null); if (!colls.length || colls.some((c) => !lt(c))) return null;
+  const main = colls.reduce((a, b) => (b.usd > a.usd ? b : a)); const others = colls.filter((c) => c !== main).reduce((s, c) => s + c.usd * lt(c), 0);
+  const k = (1 - room) * lt(main); const R = (p.debtUsd - others - main.usd * k) / (1 - k);
+  return R > 0 && R < p.debtUsd && R < main.usd ? R : null;
+}
+function leverDownText(p, c) {
+  const d = p.liquidationPrice.dropPct / 100; const room = Math.min(2 * d, 0.5); const R = unwindFor(p, room);
+  const debtMain = p.debt.filter((x) => x.usd != null).sort((a, b) => b.usd - a.usd)[0];
+  if (R == null) return `Lever down: unwind some (withdraw ${p.liquidationPrice.symbol}, swap, repay ${debtMain?.symbol || "the debt"}); each unit repaid widens the ratio room.`;
+  const repay = debtMain?.priceUsd ? `${amt(R / debtMain.priceUsd)} ${debtMain.symbol}` : "the debt";
+  const cost = c ? (c.spreadBps > 0 ? `, and gives up about ${usd((R * c.spreadBps) / 10000)} a year of carry` : c.spreadBps < 0 ? `, and saves about ${usd((R * -c.spreadBps) / 10000)} a year, since the carry runs negative at today's rates` : "") : "";
+  return `Lever down: unwinding ${usd(R)} (withdraw that much ${p.liquidationPrice.symbol}, swap it, repay ${repay}) ${room === 2 * d ? "doubles the ratio room" : "widens the ratio room"} to ${pc1(room * 100)}${cost}.`;
+}
+function loopLadder(p) {
+  const L = p.liquidationPrice; const ratio = ratioName(p); const lt = (c) => c.liquidationThreshold ?? p.liquidationThreshold;
+  const colls = p.collateral.filter((c) => c.usd != null); const main = colls.reduce((a, b) => (b.usd > a.usd ? b : a)); const others = colls.filter((c) => c !== main);
+  const at = (s) => { const coll = main.usd * (1 - s) + others.reduce((t, c) => t + c.usd, 0); const cover = main.usd * (1 - s) * lt(main) + others.reduce((t, c) => t + c.usd * lt(c), 0); return { ltv: p.debtUsd / coll, health: cover / p.debtUsd }; };
+  const out = [];
+  const shock = args.shock != null ? Math.abs(Number(args.shock)) / 100 : null;
+  if (shock) {
+    const r = at(shock);
+    out.push(`A ${(shock * 100).toFixed(0)}% ETH move shifts ${main.symbol} and ${ratio.split("/")[1]} together, so ${label(p)} stays at LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. The ratio is what liquidates it: ${ratio} −${(shock * 100).toFixed(0)}% ${r.health < 1 ? `would liquidate it (liquidation comes at −${pc1(L.dropPct)})` : `leaves it at LTV ${(r.ltv * 100).toFixed(0)}%, health ${fmtHf(r.health)}`}.`);
+  }
+  out.push(`${shock ? "Now" : cap(label(p))}: LTV ${(p.ltv * 100).toFixed(0)}%, health ${fmtHf(p.healthFactor)}. ${venueShort(p)} liquidates at ${(p.liquidationThreshold * 100).toFixed(0)}% LTV, a ${pc1(L.dropPct)} fall in the ${ratio} ratio${L.note && /other collateral/.test(L.note) ? " (other collateral held where it is)" : ""}. An ETH price move alone doesn't touch it.`);
+  for (const k of [0.01, 0.02, 0.03]) { const r = at(k); out.push(`  ${ratio} −${(k * 100).toFixed(0)}%   LTV ${(r.ltv * 100).toFixed(0)}%   health ${fmtHf(r.health)}${r.health < 1 ? "   liquidated" : ""}`); }
+  const c = loopCarry(p); if (c) out.push(`Carry: ${carryText(p, c)}.`);
+  out.push(leverDownText(p, c));
+  return out.join("\n");
+}
+function loopMoves(p) {
+  const L = p.liquidationPrice; const yearly = p.borrowApr != null ? (p.debtUsd * p.borrowApr) / 100 : null; const c = loopCarry(p);
+  const out = [`Should you move ${label(p)}? The moves, from leaving it alone to closing it.`];
+  const stand = [yearly != null ? `${usd(yearly)} a year in interest` : null, c ? `carry: ${carryText(p, c)}` : null, `liquidation if the ${ratioName(p)} ratio falls ${pc1(L.dropPct)}; an ETH price move alone doesn't touch it`].filter(Boolean);
+  out.push(`1  Do nothing: ${stand.join("; ")}.`);
+  out.push(`2  ${leverDownText(p, c)}`);
+  out.push(refiStep(p).replace(/^4 /, "3 "));
+  out.push(`4  Close: repay ${p.debt.map((d) => `${amt(d.amount)} ${d.symbol}`).join(" + ")} and ${p.collateral.map((x) => `${amt(x.amount)} ${x.symbol}`).join(" + ")} comes back.`);
   out.push("Your call.");
   return out.join("\n");
 }
