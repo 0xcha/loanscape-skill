@@ -117,9 +117,13 @@ function whenWord(iso) { const d = new Date(iso), now = new Date(); const days =
 function contrasts(top, offers) {
   const L = [];
   const cheapest = top[0];
+  // A deeper sibling of a headline venue (a second Morpho market) is called that, so one read never shows two rates under one name.
+  const sib = (o) => !top.includes(o) && top.some((x) => short(x) === short(o));
+  const nm = (o, first) => (sib(o) ? `${first ? "A" : "the"} deeper ${short(o)} market` : short(o));
   // Above the cheapest venue's cap the answer is the next-cheapest venue with more room, not the deepest one on the pair.
-  const next = cheapest?.liquidityUsd ? bestPerProtocol(sortBy(offers, "rate")).find((o) => o !== cheapest && (o.liquidityUsd || 0) > cheapest.liquidityUsd) : null;
-  if (next && next.liquidityUsd / cheapest.liquidityUsd >= 3) L.push({ kind: "depth", text: `${short(next)} has ${ratio(next.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(next.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}). Keeping a loan under a tenth of what's available, ${short(cheapest)} fits up to about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}; above that, ${short(next)} at ${pct(next.apr)}, up to about ${usdShort(next.liquidityUsd * DEPTH_SHARE)}.` });
+  // Every market counts here, not one per protocol: the cheapest Morpho market can be a thin one sitting in front of a deep one.
+  const next = cheapest?.liquidityUsd ? sortBy(offers, "rate").find((o) => o !== cheapest && (o.liquidityUsd || 0) / cheapest.liquidityUsd >= 3) : null;
+  if (next) L.push({ kind: "depth", text: `${nm(next, true)} has ${ratio(next.liquidityUsd / cheapest.liquidityUsd)} ${short(cheapest)}'s depth (${usdShort(next.liquidityUsd)} against ${usdShort(cheapest.liquidityUsd)}). Keeping a loan under a tenth of what's available, ${short(cheapest)} fits up to about ${usdShort(cheapest.liquidityUsd * DEPTH_SHARE)}; above that, ${nm(next)} at ${pct(next.apr)}, up to about ${usdShort(next.liquidityUsd * DEPTH_SHARE)}.` });
   const vol = top.find((o) => !o.suspect && o.stability === "volatile" && o.sparkline?.length > 5);
   if (vol) L.push({ kind: "volatile", text: `${short(vol)} ran ${pct(Math.min(...vol.sparkline), 0)} to ${pct(Math.max(...vol.sparkline), 0)} last month.` });
   if (L.length < 2) { const ltvLead = sortBy(offers, "ltv")[0]; if (ltvLead && ltvLead !== cheapest && ltvLead.maxLtv != null && cheapest.maxLtv != null && ltvLead.maxLtv - cheapest.maxLtv >= 3) L.push({ kind: "ltv", text: `Most borrowing power is ${short(ltvLead)} at ${ltvS(ltvLead.maxLtv)} LTV, for ${pct(ltvLead.apr)}.` }); }
@@ -127,7 +131,7 @@ function contrasts(top, offers) {
 }
 // At a given size: who can take it, who is cheapest among them, where the crossover sits.
 function sized(pair, offers, link) {
-  const byRate = bestPerProtocol(sortBy(offers, "rate"));
+  const byRate = perProtocolForSize(offers);
   const fits = byRate.filter((o) => fitsDepth(size, o.liquidityUsd));
   const stretch = byRate.filter((o) => o.liquidityUsd && !fitsDepth(size, o.liquidityUsd) && size <= o.liquidityUsd);
   const L = [];
@@ -141,7 +145,8 @@ function sized(pair, offers, link) {
     if (size <= cheaper.liquidityUsd) L.push(`${short(cheaper)} is ${bps} bps cheaper but ${usdShort(size)} is ${pctShare(size / cheaper.liquidityUsd)} of what's there, so expect to move the rate.`);
     else L.push(`${short(cheaper)} is ${bps} bps cheaper but only has ${usdShort(cheaper.liquidityUsd)} available.`);
     // Each cheaper venue holds the answer up to a tenth of its depth; the next one that fits more takes over from there.
-    const ladder = []; let cap = 0; for (const o of cheaperAll) { const c = o.liquidityUsd * DEPTH_SHARE; if (c > cap) { ladder.push({ o, cap: c }); cap = c; } }
+    // Every market counts, so a deep one behind a thin sibling keeps its band.
+    const ladder = []; let cap = 0; for (const o of sortBy(offers, "rate").filter((x) => x.apr < best.apr && x !== best && x.liquidityUsd)) { const c = o.liquidityUsd * DEPTH_SHARE; if (c > cap) { ladder.push({ o, cap: c }); cap = c; } }
     L.push(`${ladder.map(({ o, cap }, i) => (i === 0 ? `Under about ${usdShort(cap)}, ${short(o)}` : `${usdShort(ladder[i - 1].cap)} to ${usdShort(cap)}, ${short(o)}`)).join("; ")}. Above, ${short(best)}.`);
   } else if (best.maxLtv != null) L.push(`Max LTV there is ${best.maxLtv}%; ${usdShort(size)} needs about ${usdShort(size / (best.maxLtv / 100))} of ${pair.split(" → ")[0]} at the limit, more for headroom.`);
   if (link) L.push(link);
@@ -149,7 +154,7 @@ function sized(pair, offers, link) {
 }
 // Two or more named venues.
 function headToHead(pair, offers, link, p) {
-  const picks = bestPerProtocol(sortBy(offers, "rate"));
+  const picks = size ? perProtocolForSize(offers) : bestPerProtocol(sortBy(offers, "rate"));
   if (picks.length < 2) return read(pair, offers, link, p);
   if (size) {
     const can = picks.filter((o) => fitsDepth(size, o.liquidityUsd));
@@ -184,9 +189,9 @@ function table(pair, offers, link, p) {
   const sorted = sortBy(offers, rank);
   const maxLiq = Math.max(...sorted.map((o) => o.liquidityUsd || 0));
   const showDepthBar = rank === "liquidity"; const showShare = !!size;
-  const H = ["venue", "borrow APR", "max LTV", "available", ...(showDepthBar ? [""] : []), ...(showShare ? ["your share", ""] : []), "30 days", "", "market"];
+  const H = ["venue", "borrow APR", "max LTV", "available", ...(showDepthBar ? [""] : []), ...(showShare ? ["your share", ""] : []), "30-day rate", "stability", "market"];
   const A = ["l", "r", "r", "r", ...(showDepthBar ? ["l"] : []), ...(showShare ? ["r", "l"] : []), "l", "l", "l"];
-  const rows = sorted.map((o) => [tableLabel(o.venue), pct(o.apr), ltvS(o.maxLtv), usdShort(o.liquidityUsd),
+  const rows = sorted.map((o) => [tableLabel(o.venue, o, sorted), pct(o.apr), ltvS(o.maxLtv), usdShort(o.liquidityUsd),
     ...(showDepthBar ? [depthBar(o.liquidityUsd, maxLiq)] : []),
     ...(showShare ? [o.liquidityUsd ? pctShare(size / o.liquidityUsd) : "", shareBar(size, o.liquidityUsd)] : []),
     o.suspect ? "" : sparkline(o.sparkline, o.apr), o.suspect ? "history unreliable" : o.stability || "", marketNote(o)]);
@@ -201,12 +206,20 @@ function table(pair, offers, link, p) {
   return L.join("\n");
 }
 // Table labels keep the version but drop the instance noise: "Aave v3 · Prime Instance" → "Aave v3 Prime", "Spark · Main" → "Spark".
-function tableLabel(v) { return String(v).replace(" Instance", "").replace(" · Main", "").replace(/ · /g, " "); }
+// A Morpho market's trailing hash is dropped: rows at the same LLTV are told apart by their rate and available columns. It stays only when
+// two such rows show the same available figure, so no two rows ever read identically.
+function tableLabel(v, o, rows) {
+  let s = String(v);
+  if (o?.protocol === "morpho-blue" && / · [0-9a-f]{6}$/.test(s)) { const base = s.replace(/ · [0-9a-f]{6}$/, ""); const clash = rows.some((x) => x !== o && String(x.venue).replace(/ · [0-9a-f]{6}$/, "") === base && usdShort(x.liquidityUsd) === usdShort(o.liquidityUsd)); if (!clash) s = base; }
+  return s.replace(" Instance", "").replace(" · Main", "").replace(/ · /g, " ");
+}
 function grid(H, rows) { const w = H.map((h, i) => Math.max(h.length, ...rows.map((r) => String(r[i]).length))); const line = (r) => r.map((c, i) => String(c).padEnd(w[i])).join("  ").trimEnd(); return [line(H), ...rows.map(line)]; }
 function marketNote(o) { const n = String(o.note || ""); if (/governance/i.test(n)) return "governance rate"; if (/isolated/i.test(n)) return "isolated market"; if (/smart/i.test(n)) return "smart collateral"; if (/pooled/i.test(n)) return "pooled"; if (/comet|base market/i.test(n)) return "pooled"; return n.toLowerCase(); }
 // ---------------- logic ----------------
 function matchVenue(o, v) { const name = o.venue.toLowerCase(); if (v === "aave") return o.protocol === "aave-v3" && !/prime/.test(name); if (v === "prime") return /prime/.test(name); if (v === "morpho") return o.protocol === "morpho-blue"; if (v === "compound") return o.protocol === "compound-v3"; return o.protocol.includes(v) || name.includes(v); }
 function bestPerProtocol(sorted) { const seen = new Set(); return sorted.filter((o) => { const k = o.protocol + (/prime/i.test(o.venue) ? ":prime" : ""); if (seen.has(k)) return false; seen.add(k); return true; }); }
+// With a size, a protocol is represented by its cheapest market that has room for it (a deep Morpho market behind a thin, cheaper one), else by its cheapest.
+function perProtocolForSize(offers) { const all = sortBy(offers, "rate"); const room = (o) => fitsDepth(size, o.liquidityUsd); return bestPerProtocol([...all.filter(room), ...all.filter((o) => !room(o))]).sort((a, b) => a.apr - b.apr); }
 function sortBy(list, r) { const c = [...list]; if (r === "rate") c.sort((a, b) => a.apr - b.apr); if (r === "ltv") c.sort((a, b) => (b.maxLtv ?? -1) - (a.maxLtv ?? -1)); if (r === "liquidity") c.sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1)); if (r === "stability") c.sort((a, b) => (a.suspect - b.suspect) || (spread(a.sparkline) - spread(b.sparkline))); return c; }
 function spread(s) { return s && s.length > 1 ? Math.max(...s) - Math.min(...s) : 1e9; }
 

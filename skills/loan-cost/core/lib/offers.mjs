@@ -38,6 +38,8 @@ export function pairLinkOnce(mem, chainId, collSym, borrowSym, rank = null) {
   return `Every venue on this pair, live: ${deepLink(collSym, borrowSym, rank)}`;
 }
 
+function depthWord(x) { return x >= 1e9 ? `$${(x / 1e9).toFixed(1)}B` : x >= 1e6 ? `$${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `$${Math.round(x / 1e3)}k` : `$${Math.round(x)}`; }
+
 // One prose name for a venue across every script: "Aave", "Aave Prime", "Aave e-mode", "Spark", "Compound", "Fluid", "Morpho".
 // Morpho carries its LLTV ("Morpho 94.5%") only when the context list holds more than one Morpho market.
 export function venueName(o, ctx) {
@@ -45,9 +47,13 @@ export function venueName(o, ctx) {
   if (proto === "morpho-blue" || /^Morpho/.test(v)) {
     const peers = ctx ? ctx.filter((x) => x.protocol === "morpho-blue" || /^Morpho/.test(x.venue || "")) : []; const m = v.match(/(\d+(?:\.\d+)?)% LLTV/);
     if (peers.length < 2 || !m) return "Morpho";
-    // Two markets at the same LLTV (different oracle or IRM) would read as one name; the market hash tells them apart.
-    const twin = peers.some((x) => x !== o && (x.venue || "").includes(`${m[1]}% LLTV`)); const ref = typeof o === "string" ? null : o.marketRef;
-    return twin && ref ? `Morpho ${m[1]}% (${String(ref).replace(/^0x/, "").slice(0, 6)})` : `Morpho ${m[1]}%`;
+    // Two markets at the same LLTV (different oracle) would read as one name. A reader can't use a market hash, so the twin is named by
+    // what's available in it ("Morpho 86% ($53.9M market)"); the hash is the fallback only when two twins round to the same depth.
+    const twins = peers.filter((x) => x !== o && (x.venue || "").includes(`${m[1]}% LLTV`)); const ref = typeof o === "string" ? null : o.marketRef;
+    if (!twins.length) return `Morpho ${m[1]}%`;
+    const depth = typeof o === "string" || o.liquidityUsd == null ? null : depthWord(o.liquidityUsd);
+    if (depth && !twins.some((x) => x.liquidityUsd != null && depthWord(x.liquidityUsd) === depth)) return `Morpho ${m[1]}% (${depth} market)`;
+    return ref ? `Morpho ${m[1]}% (${String(ref).replace(/^0x/, "").slice(0, 6)})` : `Morpho ${m[1]}%`;
   }
   if (/^Fluid/.test(v)) return "Fluid";
   if (/^Compound/.test(v)) return "Compound";
