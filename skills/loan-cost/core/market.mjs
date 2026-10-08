@@ -137,17 +137,18 @@ function sized(pair, offers, link) {
   const L = [];
   if (!fits.length && !stretch.length) { L.push(`${pair} on ${chainName(chainId)}: nothing has ${usdShort(size)} available on this pair right now. Deepest is ${short(byRate.sort((a, b) => b.liquidityUsd - a.liquidityUsd)[0])} at ${usdShort(byRate[0].liquidityUsd)}.`); if (link) L.push(link); return paragraphs(L); }
   const best = fits[0] || stretch[0];
-  L.push(`For ${usdShort(size)} of ${pair} on ${chainName(chainId)}: ${short(best)} at ${pct(best.apr)}, where you'd be ${pctShare(size / best.liquidityUsd)} of the book.`);
-  if (fits.length === byRate.length && byRate.length > 1) { const dearest = byRate[byRate.length - 1]; L.push(`Every venue can take ${usdShort(size)}, so the cheapest rate simply wins; the spread to ${short(dearest)} at ${pct(dearest.apr)} is about ${usdShort(dollarsPerYear(bps(dearest.apr - best.apr), size))} a year.`); }
+  const nm = (o) => short(o, offers); // the pair's offers as context, so two Morpho markets never both read "Morpho"
+  L.push(`For ${usdShort(size)} of ${pair} on ${chainName(chainId)}: ${nm(best)} at ${pct(best.apr)}, where you'd be ${pctShare(size / best.liquidityUsd)} of the book.`);
+  if (fits.length === byRate.length && byRate.length > 1) { const dearest = byRate[byRate.length - 1]; L.push(`Every venue can take ${usdShort(size)}, so the cheapest rate simply wins; the spread to ${nm(dearest)} at ${pct(dearest.apr)} is about ${usdShort(dollarsPerYear(bps(dearest.apr - best.apr), size))} a year.`); }
   const cheaperAll = byRate.filter((o) => o.apr < best.apr && o !== best && o.liquidityUsd);
   if (cheaperAll.length) {
     const cheaper = cheaperAll[0]; const bps = Math.round((best.apr - cheaper.apr) * 100);
-    if (size <= cheaper.liquidityUsd) L.push(`${short(cheaper)} is ${bps} bps cheaper but ${usdShort(size)} is ${pctShare(size / cheaper.liquidityUsd)} of what's there, so expect to move the rate.`);
-    else L.push(`${short(cheaper)} is ${bps} bps cheaper but only has ${usdShort(cheaper.liquidityUsd)} available.`);
+    if (size <= cheaper.liquidityUsd) L.push(`${nm(cheaper)} is ${bps} bps cheaper but ${usdShort(size)} is ${pctShare(size / cheaper.liquidityUsd)} of what's there, so expect to move the rate.`);
+    else L.push(`${nm(cheaper)} is ${bps} bps cheaper but only has ${usdShort(cheaper.liquidityUsd)} available.`);
     // Each cheaper venue holds the answer up to a tenth of its depth; the next one that fits more takes over from there.
     // Every market counts, so a deep one behind a thin sibling keeps its band.
     const ladder = []; let cap = 0; for (const o of sortBy(offers, "rate").filter((x) => x.apr < best.apr && x !== best && x.liquidityUsd)) { const c = o.liquidityUsd * DEPTH_SHARE; if (c > cap) { ladder.push({ o, cap: c }); cap = c; } }
-    L.push(`${ladder.map(({ o, cap }, i) => (i === 0 ? `Under about ${usdShort(cap)}, ${short(o)}` : `${usdShort(ladder[i - 1].cap)} to ${usdShort(cap)}, ${short(o)}`)).join("; ")}. Above, ${short(best)}.`);
+    L.push(`${ladder.map(({ o, cap }, i) => (i === 0 ? `Under about ${usdShort(cap)}, ${nm(o)}` : `${usdShort(ladder[i - 1].cap)} to ${usdShort(cap)}, ${nm(o)}`)).join("; ")}. Above, ${nm(best)}.`);
   } else if (best.maxLtv != null) L.push(`Max LTV there is ${best.maxLtv}%; ${usdShort(size)} needs about ${usdShort(size / (best.maxLtv / 100))} of ${pair.split(" → ")[0]} at the limit, more for headroom.`);
   if (link) L.push(link);
   return paragraphs(L);

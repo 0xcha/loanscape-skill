@@ -8,7 +8,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; SRC="$HERE/plugins/lotus"; RC=0
 for d in "$SRC"/skills/*/; do
   n="$(basename "$d")"; dst="$HERE/skills/$n"
   if [ "${1:-}" = "--check" ]; then
-    diff -rq "$SRC/core" "$dst/core" || RC=1
+    diff -rq -x .claude "$SRC/core" "$dst/core" || RC=1
     diff -q "$SRC/skills/$n/SKILL.md" "$dst/SKILL.md" || RC=1
   else
     mkdir -p "$dst"; rm -rf "$dst/core"; cp -R "$SRC/core" "$dst/core"; cp "$SRC/skills/$n/SKILL.md" "$dst/SKILL.md"

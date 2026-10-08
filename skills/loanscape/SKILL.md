@@ -5,7 +5,7 @@ allowed-tools: Bash(node *)
 metadata:
   author: Lotus Labs
   homepage: https://loanscape.lotuslabs.net
-  version: "0.2.23"
+  version: "0.2.24"
 ---
 
 # /loanscape: the position brief
